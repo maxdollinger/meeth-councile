@@ -60,6 +60,15 @@ li b { font-weight: 600; }
 
 li span { color: var(--muted); }
 
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
+
+.models { list-style: none; padding-left: 0; }
+
+.models code { color: var(--muted); }
+
 hr {
   border: 0;
   border-top: 1px solid var(--rule);
@@ -68,14 +77,25 @@ hr {
 
 a { color: inherit; }
 
+.opening {
+  margin: 0 0 1.75rem;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+
+.opening h2 { margin-top: 0; }
+
 .opening .content {
+  white-space: normal;
   font-style: italic;
   font-size: 1.05rem;
 }
 
 .entry { margin: 0 0 1.75rem; }
 
-.entry .meta {
+.entry .meta,
+.opening .meta {
   margin: 0 0 0.25rem;
   color: var(--muted);
   font-size: 0.85rem;

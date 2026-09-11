@@ -33,16 +33,12 @@ var models = []string{
 }
 
 const (
+	defaultTitle = "Kernfrage der Metaethik"
 	defaultTopic = `Diese Diskussion behandelt die Kernfrage der Metaethik:
 
-Wenn wir sagen, dass eine Handlung moralisch falsch ist — behaupten wir
-damit eine Tatsache, die wahr ist, unabhängig davon, was irgendjemand
-glaubt, fühlt oder vereinbart? Und wenn ja: was macht diese Tatsache
-wahr? Wenn nein: was tun wir dann eigentlich, wenn wir so sprechen?
+Wenn wir sagen, dass eine Handlung moralisch falsch ist — behaupten wir damit eine Tatsache, die wahr ist, unabhängig davon, was irgendjemand glaubt, fühlt oder vereinbart? Und wenn ja: was macht diese Tatsache wahr? Wenn nein: was tun wir dann eigentlich, wenn wir so sprechen?
 
-Legt eure Position dar, geht auf das ein, was die anderen sagen, und
-lasst euch nur von Gründen bewegen — nicht davon, wie viele anderer
-Meinung sind.`
+Legt eure Position dar, geht auf das ein, was die anderen sagen, und lasst euch nur von Gründen bewegen — nicht davon, wie viele anderer Meinung sind.`
 	defaultResearchModel = "deepseek/deepseek-v4-flash-0731"
 	defaultDBPath        = "debate.db"
 	defaultAddr          = ":8080"
@@ -56,10 +52,10 @@ func main() {
 		fatal(logger, "OPENROUTER_API_KEY is required")
 	}
 
+	title := env("TITLE", defaultTitle)
 	topic := env("TOPIC", defaultTopic)
 	dbPath := env("DB_PATH", defaultDBPath)
 	researchModel := env("RESEARCH_MODEL", defaultResearchModel)
-	discussionID := env("DISCUSSION_ID", time.Now().Format("20060102-150405"))
 	addr := env("ADDR", defaultAddr)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -84,7 +80,7 @@ func main() {
 	}
 	speakers := make([]discussion.Speaker, 0, len(defs))
 	for _, def := range defs {
-		mem, err := memory.New(ctx, repo, discussionID, def.Name, memory.WithLogger(logger))
+		mem, err := memory.New(ctx, repo, def.Name, memory.WithLogger(logger))
 		if err != nil {
 			fatal(logger, "open memory", "persona", def.Name, "err", err)
 		}
@@ -107,16 +103,29 @@ func main() {
 		fatal(logger, "build discussion", "err", err)
 	}
 
-	tmpl, err := template.ParseFiles("web/discussion.html")
+	discussionTmpl, err := template.ParseFiles("web/discussion.html")
 	if err != nil {
 		fatal(logger, "parse discussion template", "err", err)
 	}
 
-	srv := &server{turns: turns, discussionID: discussionID, topic: topic, logger: logger}
+	indexTmpl, err := template.ParseFiles("web/index.html")
+	if err != nil {
+		fatal(logger, "parse index template", "err", err)
+	}
+
+	srv := &server{
+		turns:         turns,
+		title:         title,
+		personas:      defs,
+		models:        models,
+		researchModel: researchModel,
+		logger:        logger,
+	}
 	srv.running.Store(true)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/discussion.html", srv.handle(tmpl))
+	mux.HandleFunc("/discussion.html", srv.handle(discussionTmpl))
+	mux.HandleFunc("/{$}", srv.index(indexTmpl))
 	mux.Handle("/", http.FileServer(http.Dir("web")))
 
 	httpSrv := &http.Server{Addr: addr, Handler: logging.Middleware(logger, mux)}
@@ -124,15 +133,14 @@ func main() {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		res, err := d.Run(ctx, discussionID)
+		res, err := d.Run(ctx)
 		if err != nil {
-			logger.Error("discussion stopped early", "discussion_id", discussionID, "err", err)
+			logger.Error("discussion stopped early", "err", err)
 		}
 		srv.running.Store(false)
-		printTranscript(discussionID, res)
+		printTranscript(res)
 		logger.Info(
 			"transcript written",
-			"discussion_id", discussionID,
 			"rounds", res.Rounds,
 			"ended", string(res.Ended),
 			"turns", len(res.Turns),
@@ -158,46 +166,68 @@ func main() {
 
 // server renders the live discussion transcript from the shared turns store.
 type server struct {
-	turns        *store.Turns
-	discussionID string
-	topic        string
-	logger       *slog.Logger
-	running      atomic.Bool
+	turns         *store.Turns
+	title         string
+	personas      []prompts.Definition
+	models        []string
+	researchModel string
+	logger        *slog.Logger
+	running       atomic.Bool
 }
 
 // discussionView is the data the discussion.html template renders.
 type discussionView struct {
-	Topic        string
-	DiscussionID string
-	Entries      []store.SpeakEntry
-	Running      bool
+	Title   string
+	Entries []store.SpeakEntry
+	Running bool
+}
+
+// indexView is the data the index.html template renders.
+type indexView struct {
+	Personas      []prompts.Definition
+	Models        []string
+	ResearchModel string
+}
+
+// index returns the handler that renders the landing page with the roster of
+// personas and the position each one argues for.
+func (s *server) index(tmpl *template.Template) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := tmpl.Execute(w, indexView{
+			Personas:      s.personas,
+			Models:        s.models,
+			ResearchModel: s.researchModel,
+		}); err != nil {
+			s.logger.Error("render index", "err", err)
+		}
+	}
 }
 
 // handle returns the handler that renders the whole discussion so far, as every
 // speak output ordered by time.
 func (s *server) handle(tmpl *template.Template) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		entries, err := s.turns.SpeakEntries(r.Context(), s.discussionID)
+		entries, err := s.turns.SpeakEntries(r.Context())
 		if err != nil {
-			s.logger.Error("load discussion", "discussion_id", s.discussionID, "err", err)
+			s.logger.Error("load discussion", "err", err)
 			http.Error(w, "could not load the discussion", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := tmpl.Execute(w, discussionView{
-			Topic:        s.topic,
-			DiscussionID: s.discussionID,
-			Entries:      entries,
-			Running:      s.running.Load(),
+			Title:   s.title,
+			Entries: entries,
+			Running: s.running.Load(),
 		}); err != nil {
-			s.logger.Error("render discussion", "discussion_id", s.discussionID, "err", err)
+			s.logger.Error("render discussion", "err", err)
 		}
 	}
 }
 
 // printTranscript writes every speak entry, with its time, to stdout.
-func printTranscript(id string, res discussion.Result) {
-	fmt.Printf("\n=== discussion %s — %d round(s), ended: %s ===\n\n", id, res.Rounds, res.Ended)
+func printTranscript(res discussion.Result) {
+	fmt.Printf("\n=== %d round(s), ended: %s ===\n\n", res.Rounds, res.Ended)
 	for _, e := range res.Entries {
 		stamp := e.CreatedAt.Format("2006-01-02 15:04:05")
 		if e.Round == 0 {

@@ -29,7 +29,6 @@ type LogEntry struct {
 	ID        int64
 	Caller    string
 	Question  string
-	Context   string
 	Answer    string
 	Usage     llm.Usage
 	Err       string
@@ -40,9 +39,9 @@ type LogEntry struct {
 func (l *Log) Append(ctx context.Context, e LogEntry) error {
 	_, err := l.db.ExecContext(ctx, `
 		INSERT INTO research_log
-			(caller, question, context, answer, input_tokens, output_tokens, total_tokens, cost, error, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.Caller, e.Question, nullString(e.Context), nullString(e.Answer),
+			(caller, question, answer, input_tokens, output_tokens, total_tokens, cost, error, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.Caller, e.Question, nullString(e.Answer),
 		e.Usage.InputTokens, e.Usage.OutputTokens, e.Usage.TotalTokens, e.Usage.Cost,
 		nullString(e.Err), time.Now().Unix(),
 	)
@@ -55,7 +54,7 @@ func (l *Log) Append(ctx context.Context, e LogEntry) error {
 // Entries returns the log in insertion order, oldest first.
 func (l *Log) Entries(ctx context.Context) ([]LogEntry, error) {
 	rows, err := l.db.QueryContext(ctx, `
-		SELECT id, caller, question, COALESCE(context, ''), COALESCE(answer, ''),
+		SELECT id, caller, question, COALESCE(answer, ''),
 		       input_tokens, output_tokens, total_tokens, cost, COALESCE(error, ''), created_at
 		FROM research_log ORDER BY id`)
 	if err != nil {
@@ -70,7 +69,7 @@ func (l *Log) Entries(ctx context.Context) ([]LogEntry, error) {
 			createdAt int64
 		)
 		if err := rows.Scan(
-			&e.ID, &e.Caller, &e.Question, &e.Context, &e.Answer,
+			&e.ID, &e.Caller, &e.Question, &e.Answer,
 			&e.Usage.InputTokens, &e.Usage.OutputTokens, &e.Usage.TotalTokens, &e.Usage.Cost,
 			&e.Err, &createdAt,
 		); err != nil {

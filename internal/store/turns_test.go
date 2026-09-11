@@ -26,12 +26,12 @@ func TestTurnsAppendAndEntriesInOrder(t *testing.T) {
 		{Round: 2, Order: 1, Speaker: "expressivism", Model: "m1", Content: "third"},
 	}
 	for _, turn := range turns {
-		if err := repo.Append(ctx, "d1", turn); err != nil {
+		if err := repo.Append(ctx, turn); err != nil {
 			t.Fatalf("Append: %v", err)
 		}
 	}
 
-	got, err := repo.Entries(ctx, "d1")
+	got, err := repo.Entries(ctx)
 	if err != nil {
 		t.Fatalf("Entries: %v", err)
 	}
@@ -44,16 +44,6 @@ func TestTurnsAppendAndEntriesInOrder(t *testing.T) {
 			got[i].Content != want.Content || got[i].Passed != want.Passed {
 			t.Errorf("turn[%d] = %+v, want %+v", i, got[i], want)
 		}
-	}
-
-	if other, _ := repo.Entries(ctx, "d2"); len(other) != 0 {
-		t.Errorf("other discussion sees %d turns, want 0", len(other))
-	}
-}
-
-func TestTurnsAppendRequiresDiscussionID(t *testing.T) {
-	if err := openTurnsRepo(t).Append(context.Background(), "  ", Turn{Speaker: "realism"}); err == nil {
-		t.Fatal("blank discussion id: want error, got nil")
 	}
 }
 
@@ -68,12 +58,12 @@ func TestSpeakEntriesInInsertionOrder(t *testing.T) {
 		{Round: 1, Speaker: "realism", Model: "m1", Kind: "message", Content: "my answer"},
 	}
 	for _, e := range want {
-		if err := repo.AppendSpeakEntry(ctx, "d1", e); err != nil {
+		if err := repo.AppendSpeakEntry(ctx, e); err != nil {
 			t.Fatalf("AppendSpeakEntry: %v", err)
 		}
 	}
 
-	got, err := repo.SpeakEntries(ctx, "d1")
+	got, err := repo.SpeakEntries(ctx)
 	if err != nil {
 		t.Fatalf("SpeakEntries: %v", err)
 	}
@@ -88,12 +78,5 @@ func TestSpeakEntriesInInsertionOrder(t *testing.T) {
 		if got[i].CreatedAt.IsZero() {
 			t.Errorf("entry[%d] has zero CreatedAt", i)
 		}
-	}
-
-	if other, _ := repo.SpeakEntries(ctx, "d2"); len(other) != 0 {
-		t.Errorf("other discussion sees %d entries, want 0", len(other))
-	}
-	if err := repo.AppendSpeakEntry(ctx, "  ", SpeakEntry{Kind: "message"}); err == nil {
-		t.Fatal("blank discussion id: want error, got nil")
 	}
 }

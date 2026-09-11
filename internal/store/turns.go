@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -36,16 +35,12 @@ type Turn struct {
 	CreatedAt time.Time
 }
 
-// Append records one turn in discussionID.
-func (t *Turns) Append(ctx context.Context, discussionID string, turn Turn) error {
-	discussionID = strings.TrimSpace(discussionID)
-	if discussionID == "" {
-		return fmt.Errorf("store: discussion id is required")
-	}
+// Append records one turn.
+func (t *Turns) Append(ctx context.Context, turn Turn) error {
 	_, err := t.db.ExecContext(ctx, `
-		INSERT INTO turns (discussion_id, round, turn, speaker, model, content, passed, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		discussionID, turn.Round, turn.Order, turn.Speaker, turn.Model,
+		INSERT INTO turns (round, turn, speaker, model, content, passed, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		turn.Round, turn.Order, turn.Speaker, turn.Model,
 		turn.Content, boolInt(turn.Passed), time.Now().Unix(),
 	)
 	if err != nil {
@@ -67,20 +62,16 @@ type SpeakEntry struct {
 	CreatedAt time.Time
 }
 
-// AppendSpeakEntry records one speak output in discussionID.
-func (t *Turns) AppendSpeakEntry(ctx context.Context, discussionID string, e SpeakEntry) error {
-	discussionID = strings.TrimSpace(discussionID)
-	if discussionID == "" {
-		return fmt.Errorf("store: discussion id is required")
-	}
+// AppendSpeakEntry records one speak output.
+func (t *Turns) AppendSpeakEntry(ctx context.Context, e SpeakEntry) error {
 	createdAt := e.CreatedAt
 	if createdAt.IsZero() {
 		createdAt = time.Now()
 	}
 	_, err := t.db.ExecContext(ctx, `
-		INSERT INTO speak_entries (discussion_id, round, speaker, model, kind, content, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		discussionID, e.Round, e.Speaker, e.Model, e.Kind, e.Content, createdAt.Unix(),
+		INSERT INTO speak_entries (round, speaker, model, kind, content, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		e.Round, e.Speaker, e.Model, e.Kind, e.Content, createdAt.Unix(),
 	)
 	if err != nil {
 		return fmt.Errorf("store: append speak entry: %w", err)
@@ -88,12 +79,12 @@ func (t *Turns) AppendSpeakEntry(ctx context.Context, discussionID string, e Spe
 	return nil
 }
 
-// SpeakEntries returns discussionID's speak outputs ordered by time, then by
-// insertion order for outputs recorded within the same second.
-func (t *Turns) SpeakEntries(ctx context.Context, discussionID string) ([]SpeakEntry, error) {
+// SpeakEntries returns the speak outputs ordered by time, then by insertion
+// order for outputs recorded within the same second.
+func (t *Turns) SpeakEntries(ctx context.Context) ([]SpeakEntry, error) {
 	rows, err := t.db.QueryContext(ctx, `
 		SELECT id, round, speaker, model, kind, content, created_at
-		FROM speak_entries WHERE discussion_id = ? ORDER BY created_at, id`, discussionID)
+		FROM speak_entries ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list speak entries: %w", err)
 	}
@@ -119,11 +110,11 @@ func (t *Turns) SpeakEntries(ctx context.Context, discussionID string) ([]SpeakE
 	return out, nil
 }
 
-// Entries returns discussionID's turns in speaking order.
-func (t *Turns) Entries(ctx context.Context, discussionID string) ([]Turn, error) {
+// Entries returns the turns in speaking order.
+func (t *Turns) Entries(ctx context.Context) ([]Turn, error) {
 	rows, err := t.db.QueryContext(ctx, `
 		SELECT id, round, turn, speaker, model, content, passed, created_at
-		FROM turns WHERE discussion_id = ? ORDER BY round, turn`, discussionID)
+		FROM turns ORDER BY round, turn`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list turns: %w", err)
 	}

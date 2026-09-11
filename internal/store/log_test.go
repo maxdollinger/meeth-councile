@@ -19,7 +19,7 @@ func TestLogAppendEntriesOldestFirst(t *testing.T) {
 	log := NewLog(db)
 
 	usage := llm.Usage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3, Cost: 0.02}
-	if err := log.Append(ctx, LogEntry{Caller: "realism", Question: "Q1", Context: "ctx", Answer: "A1", Usage: usage}); err != nil {
+	if err := log.Append(ctx, LogEntry{Caller: "realism", Question: "Q1", Answer: "A1", Usage: usage}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if err := log.Append(ctx, LogEntry{Caller: "error-theory", Question: "Q2", Err: "boom"}); err != nil {
@@ -34,7 +34,7 @@ func TestLogAppendEntriesOldestFirst(t *testing.T) {
 		t.Fatalf("entries = %d, want 2", len(entries))
 	}
 	first := entries[0]
-	if first.Caller != "realism" || first.Question != "Q1" || first.Context != "ctx" || first.Answer != "A1" {
+	if first.Caller != "realism" || first.Question != "Q1" || first.Answer != "A1" {
 		t.Errorf("first = %+v, want fields preserved", first)
 	}
 	if first.Usage != usage {

@@ -1,11 +1,11 @@
-// Package persona wires one debate agent's private memory to the model: it
-// comprehends what it hears (Hear) and produces its own turns (Speak), both
-// through an agent loop that may call the research assistant.
+// Package persona wires one debate agent's private memory to the model. It
+// comprehends what it hears (Hear) with a single completion and produces its
+// own turns (Speak) through an agent loop that may call the research assistant.
 //
 // A Persona never talks to the database directly; persistence is the memory
 // package's job. It is the layer that turns raw exchange payloads into stored
-// understandings and answers, using a single completion (understand) plus a
-// tool loop shared by Hear and Speak.
+// understandings and answers, using a single completion (understand) to hear
+// and a tool loop to speak.
 package persona
 
 import (
@@ -28,11 +28,7 @@ const (
 	researchTool    = "research_assistant"
 
 	// speakInstruction is appended to the persona's history to elicit a turn.
-	speakInstruction = "It is your turn. Respond to the discussion so far in your own voice."
-
-	// hearInstruction is appended after the persona's own initial summary of
-	// what it heard, inviting it to research and settle on an understanding.
-	hearInstruction = "That is your first read on what you just heard. If a specific fact, case, or piece of evidence would sharpen it, use research_assistant. Then state your settled understanding in your own words."
+	speakInstruction = "Du bist an der Reihe. Antworte auf die bisherige Diskussion mit deiner eigenen Stimme."
 )
 
 // CompletionClient is the slice of *llm.Client this package depends on, kept as
@@ -44,7 +40,7 @@ type CompletionClient interface {
 // Researcher is the slice of *research.Assistant this package depends on. The
 // persona's research_assistant tool is a thin adapter over it.
 type Researcher interface {
-	Research(ctx context.Context, question, background, caller string) (string, llm.Usage, error)
+	Research(ctx context.Context, question, caller string) (string, llm.Usage, error)
 }
 
 // Persona is one debate agent: a private memory plus the model calls that read
@@ -59,6 +55,7 @@ type Persona struct {
 	opts       []llm.ResponseOption
 	loop       *agent.Agent
 	logger     *slog.Logger
+	baseLogger *slog.Logger
 }
 
 // New builds a Persona over mem. client and model drive both the comprehension
@@ -86,10 +83,12 @@ func New(mem *memory.Memory, client CompletionClient, model string, researcher R
 		researcher: researcher,
 		maxSteps:   defaultMaxSteps,
 		logger:     logging.Discard(),
+		baseLogger: logging.Discard(),
 	}
 	for _, opt := range opts {
 		opt(p)
 	}
+	p.refreshLogger()
 	p.buildLoop()
 	return p, nil
 }
@@ -106,8 +105,15 @@ func (p *Persona) UseModel(model string) error {
 		return errors.New("persona: model is required")
 	}
 	p.model = model
+	p.refreshLogger()
 	p.buildLoop()
 	return nil
+}
+
+// refreshLogger rebuilds the per-persona logger so every record carries the
+// persona name and the model currently in use, each exactly once.
+func (p *Persona) refreshLogger() {
+	p.logger = p.baseLogger.With("persona", p.name, "model", p.model)
 }
 
 func (p *Persona) buildLoop() {
@@ -128,46 +134,44 @@ func (p *Persona) loopOptions() []agent.Option {
 }
 
 // Hear interprets something the persona heard. name is the speaker and content
-// is what they said. The raw content is first reduced to the persona's own
-// subjective summary (understand), then folded into a research-capable loop
-// over the full history. The settled understanding is stored and returned;
-// Source keeps the raw words for audit, and Items keeps the loop so future
-// turns replay how the persona arrived at it.
+// is what they said. A single comprehension completion turns it into the
+// persona's own subjective summary, which is stored and returned. Source keeps
+// the raw words for audit.
 func (p *Persona) Hear(ctx context.Context, name, content string) (memory.Understanding, error) {
 	start := time.Now()
-	p.logger.Info("hear started", "persona", p.name, "speaker", name, "heard_chars", len(content))
+	p.logger.Info("hear started", "speaker", name, "heard_chars", len(content))
 	summary, err := p.understand(ctx, name, content)
 	if err != nil {
-		p.logger.Info("hear failed", "persona", p.name, "speaker", name, "duration", time.Since(start), "err", err)
-		return memory.Understanding{}, err
-	}
-
-	history, err := p.memory.History(ctx)
-	if err != nil {
-		p.logger.Info("hear failed", "persona", p.name, "speaker", name, "duration", time.Since(start), "err", err)
-		return memory.Understanding{}, err
-	}
-	input := make(llm.Input, 0, len(history)+2)
-	input = append(input, history...)
-	input = append(input, llm.Assistant(summary), llm.User(hearInstruction))
-
-	res, err := p.loop.Run(ctx, input)
-	if err != nil {
-		p.logger.Info("hear failed", "persona", p.name, "speaker", name, "duration", time.Since(start), "err", err)
+		p.logger.Info("hear failed", "speaker", name, "duration", time.Since(start), "err", err)
 		return memory.Understanding{}, err
 	}
 
 	u := memory.Understanding{
 		Speaker: name,
-		Content: strings.TrimSpace(res.Text),
+		Content: summary,
 		Source:  content,
-		Items:   newItems(input, res.History),
 	}
 	if err := p.memory.AppendUnderstanding(ctx, u); err != nil {
-		p.logger.Info("hear failed", "persona", p.name, "speaker", name, "duration", time.Since(start), "err", err)
+		p.logger.Info("hear failed", "speaker", name, "duration", time.Since(start), "err", err)
 		return memory.Understanding{}, err
 	}
-	p.logger.Info("hear finished", "persona", p.name, "speaker", name, "heard_chars", len(content), "understanding_chars", len(u.Content), "duration", time.Since(start))
+	p.logger.Info("hear finished", "speaker", name, "heard_chars", len(content), "understanding_chars", len(u.Content), "duration", time.Since(start))
+	return u, nil
+}
+
+// HearDirect records what was heard verbatim, without the comprehension step
+// and without any model call. The moderator's opening uses it, so every persona
+// receives the question itself rather than an interpretation of it.
+func (p *Persona) HearDirect(ctx context.Context, name, content string) (memory.Understanding, error) {
+	u := memory.Understanding{
+		Speaker: name,
+		Content: content,
+		Source:  content,
+	}
+	if err := p.memory.AppendUnderstanding(ctx, u); err != nil {
+		return memory.Understanding{}, err
+	}
+	p.logger.Info("heard directly", "speaker", name, "chars", len(content))
 	return u, nil
 }
 
@@ -177,10 +181,10 @@ func (p *Persona) Hear(ctx context.Context, name, content string) (memory.Unders
 // answer text.
 func (p *Persona) Speak(ctx context.Context) (string, string, llm.Input, error) {
 	start := time.Now()
-	p.logger.Info("speak started", "persona", p.name, "model", p.model)
+	p.logger.Info("speak started")
 	history, err := p.memory.History(ctx)
 	if err != nil {
-		p.logger.Info("speak failed", "persona", p.name, "model", p.model, "duration", time.Since(start), "err", err)
+		p.logger.Info("speak failed", "duration", time.Since(start), "err", err)
 		return "", "", nil, err
 	}
 	input := make(llm.Input, 0, len(history)+1)
@@ -189,7 +193,7 @@ func (p *Persona) Speak(ctx context.Context) (string, string, llm.Input, error) 
 
 	res, err := p.loop.Run(ctx, input)
 	if err != nil {
-		p.logger.Info("speak failed", "persona", p.name, "model", p.model, "duration", time.Since(start), "err", err)
+		p.logger.Info("speak failed", "duration", time.Since(start), "err", err)
 		return "", "", nil, err
 	}
 
@@ -200,10 +204,10 @@ func (p *Persona) Speak(ctx context.Context) (string, string, llm.Input, error) 
 		Content: content,
 		Items:   output,
 	}); err != nil {
-		p.logger.Info("speak failed", "persona", p.name, "model", p.model, "duration", time.Since(start), "err", err)
+		p.logger.Info("speak failed", "duration", time.Since(start), "err", err)
 		return "", "", nil, err
 	}
-	p.logger.Info("speak finished", "persona", p.name, "model", p.model, "chars", len(content), "passed", res.Passed, "steps", res.Steps, "duration", time.Since(start))
+	p.logger.Info("speak finished", "chars", len(content), "passed", res.Passed, "steps", res.Steps, "duration", time.Since(start))
 	return p.name, content, output, nil
 }
 
@@ -220,7 +224,7 @@ func (p *Persona) understand(ctx context.Context, name, content string) (string,
 	if err != nil {
 		return "", err
 	}
-	p.logger.Debug("persona comprehension", "speaker", name, "model", p.model, "chars", len(res.Text))
+	p.logger.Debug("persona comprehension", "speaker", name, "chars", len(res.Text))
 	return strings.TrimSpace(res.Text), nil
 }
 
@@ -233,13 +237,13 @@ func (p *Persona) researchTool() agent.Tool {
 		"properties": map[string]any{
 			"query": map[string]any{
 				"type":        "string",
-				"description": "A self-contained question. The research assistant has no memory of this discussion, so include whatever context it needs.",
+				"description": "Eine eigenständige Frage. Der Recherche-Assistent hat keine Erinnerung an diese Diskussion, gib also den Kontext mit, den er braucht.",
 			},
 		},
 		"required": []string{"query"},
 	}
 	return agent.NewTool(researchTool,
-		"Answer a self-contained research question using web search and fetch; returns a synthesized answer, not raw sources.",
+		"Beantworte eine eigenständige Recherchefrage mit Websuche und Web-Abruf; liefert eine zusammengefasste Antwort, keine Rohquellen.",
 		schema,
 		func(ctx context.Context, arguments string) (string, error) {
 			var in struct {
@@ -248,7 +252,7 @@ func (p *Persona) researchTool() agent.Tool {
 			if err := json.Unmarshal([]byte(arguments), &in); err != nil {
 				return "", fmt.Errorf("persona: decode research arguments: %w", err)
 			}
-			answer, _, err := p.researcher.Research(ctx, in.Query, "", p.name)
+			answer, _, err := p.researcher.Research(ctx, in.Query, p.name)
 			return answer, err
 		},
 	)

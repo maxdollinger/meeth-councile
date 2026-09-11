@@ -10,7 +10,7 @@ import (
 // comprehensionInstruction closes the comprehension prompt. It asks the model
 // to record the persona's own interpretation while keeping what was actually
 // said or reported separate from what the persona makes of it.
-const comprehensionInstruction = "This is something you have heard or found. In your own words, record what you now understand from it. Separate what was actually said or reported from your own interpretation. Reply with only that understanding."
+const comprehensionInstruction = "Das ist etwas, das du gehört oder gefunden hast. Halte in deinen eigenen Worten fest, was du jetzt daraus verstehst. Trenne, was tatsächlich gesagt oder berichtet wurde, von deiner eigenen Deutung. Antworte nur mit diesem Verständnis."
 
 // SystemPrompt is the persona's assembled system prompt: the shared prompt plus
 // the position-specific one. Pass it to agent.New; it is not part of History.

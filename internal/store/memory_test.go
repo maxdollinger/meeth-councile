@@ -36,11 +36,11 @@ func TestMemoryLoadSnapshotsPrompts(t *testing.T) {
 	ctx := context.Background()
 	repo := openMemoryRepo(t)
 
-	first, err := repo.Load(ctx, "d1", "realism", "common-v1", "persona-v1")
+	first, err := repo.Load(ctx, "realism", "common-v1", "persona-v1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	second, err := repo.Load(ctx, "d1", "realism", "common-v2", "persona-v2")
+	second, err := repo.Load(ctx, "realism", "common-v2", "persona-v2")
 	if err != nil {
 		t.Fatalf("second Load: %v", err)
 	}
@@ -52,22 +52,17 @@ func TestMemoryLoadSnapshotsPrompts(t *testing.T) {
 	}
 }
 
-func TestMemoryLoadRequiresIDs(t *testing.T) {
+func TestMemoryLoadRequiresPersona(t *testing.T) {
 	repo := openMemoryRepo(t)
-	for _, tc := range []struct{ discussion, persona string }{
-		{"", "realism"},
-		{"d1", ""},
-	} {
-		if _, err := repo.Load(context.Background(), tc.discussion, tc.persona, "c", "p"); err == nil {
-			t.Errorf("Load(%q, %q): want error, got nil", tc.discussion, tc.persona)
-		}
+	if _, err := repo.Load(context.Background(), "  ", "c", "p"); err == nil {
+		t.Fatal("blank persona: want error, got nil")
 	}
 }
 
 func TestMemoryAppendAndEntriesRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	repo := openMemoryRepo(t)
-	snap, err := repo.Load(ctx, "d1", "realism", "c", "p")
+	snap, err := repo.Load(ctx, "realism", "c", "p")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -106,7 +101,7 @@ func TestMemoryAppendAndEntriesRoundTrip(t *testing.T) {
 	}
 
 	// A different memory sees nothing.
-	other, err := repo.Load(ctx, "d2", "realism", "c", "p")
+	other, err := repo.Load(ctx, "expressivism", "c", "p")
 	if err != nil {
 		t.Fatalf("other Load: %v", err)
 	}

@@ -31,7 +31,6 @@ func NewMemory(db *sql.DB) *Memory {
 // to the prompt files do not rewrite an existing memory.
 type Snapshot struct {
 	ID            string
-	DiscussionID  string
 	Persona       string
 	CommonPrompt  string
 	PersonaPrompt string
@@ -50,42 +49,38 @@ type Entry struct {
 	CreatedAt time.Time
 }
 
-// Load creates the persona's memory for discussionID on first use, snapshotting
-// the prompts, and returns it. On later calls with the same discussion and
-// persona it returns the stored snapshot, ignoring the prompts passed in.
-func (m *Memory) Load(ctx context.Context, discussionID, persona, commonPrompt, personaPrompt string) (Snapshot, error) {
-	discussionID = strings.TrimSpace(discussionID)
+// Load creates the persona's memory on first use, snapshotting the prompts, and
+// returns it. On later calls with the same persona it returns the stored
+// snapshot, ignoring the prompts passed in.
+func (m *Memory) Load(ctx context.Context, persona, commonPrompt, personaPrompt string) (Snapshot, error) {
 	persona = strings.TrimSpace(persona)
-	if discussionID == "" {
-		return Snapshot{}, errors.New("store: discussion id is required")
-	}
 	if persona == "" {
 		return Snapshot{}, errors.New("store: persona is required")
 	}
 
 	s := Snapshot{
-		ID:            discussionID + "/" + persona,
-		DiscussionID:  discussionID,
+		ID:            persona,
 		Persona:       persona,
 		CommonPrompt:  commonPrompt,
 		PersonaPrompt: personaPrompt,
 	}
 	if _, err := m.db.ExecContext(ctx, `
-		INSERT INTO memories (id, discussion_id, persona, common_prompt, persona_prompt, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT (discussion_id, persona) DO NOTHING`,
-		s.ID, discussionID, persona, commonPrompt, personaPrompt, time.Now().Unix(),
+		INSERT INTO memories (persona, common_prompt, persona_prompt, created_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (persona) DO NOTHING`,
+		persona, commonPrompt, personaPrompt, time.Now().Unix(),
 	); err != nil {
 		return Snapshot{}, fmt.Errorf("store: create memory: %w", err)
 	}
 
 	row := m.db.QueryRowContext(ctx,
-		`SELECT id, discussion_id, persona, common_prompt, persona_prompt
-		 FROM memories WHERE discussion_id = ? AND persona = ?`,
-		discussionID, persona)
-	if err := row.Scan(&s.ID, &s.DiscussionID, &s.Persona, &s.CommonPrompt, &s.PersonaPrompt); err != nil {
+		`SELECT persona, common_prompt, persona_prompt
+		 FROM memories WHERE persona = ?`,
+		persona)
+	if err := row.Scan(&s.Persona, &s.CommonPrompt, &s.PersonaPrompt); err != nil {
 		return Snapshot{}, fmt.Errorf("store: load memory: %w", err)
 	}
+	s.ID = s.Persona
 	return s, nil
 }
 

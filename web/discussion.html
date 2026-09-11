@@ -1,29 +1,29 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Discussion — Metaethics Debate</title>
+<title>{{.Title}} — Metaethik</title>
 <link rel="stylesheet" href="/style.css">
-{{if .Running}}<meta http-equiv="refresh" content="5">{{end}}
+{{if .Running}}<meta http-equiv="refresh" content="60">{{end}}
 </head>
 <body>
 
 <header>
-  <h1>{{.Topic}}</h1>
-  <p class="tagline">discussion {{.DiscussionID}} &middot; {{if .Running}}in progress{{else}}ended{{end}}</p>
+  <h1>{{.Title}}</h1>
+  <p class="tagline">{{if .Running}}läuft{{else}}beendet{{end}}</p>
 </header>
 
 <main>
 {{range .Entries}}{{if eq .Kind "opening"}}
   <section class="opening">
-    <h2>Opening question</h2>
+    <h2>Ausgangsfrage</h2>
     <p class="meta"><time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05"}}">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</time></p>
     <p class="content">{{.Content}}</p>
   </section>
 {{else}}
   <article class="entry {{.Kind}}">
-    <p class="meta">{{.Speaker}}{{if .Model}} <span class="model">{{.Model}}</span>{{end}} &middot; {{.Kind}} &middot; <time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05"}}">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</time></p>
+    <p class="meta">{{.Speaker}} &middot; <time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05"}}">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</time></p>
     <p class="content">{{.Content}}</p>
   </article>
 {{end}}{{end}}
@@ -31,7 +31,7 @@
 
 <hr>
 
-<p class="back"><a href="/">&larr; back to the index</a></p>
+<p class="back"><a href="/">&larr; zurück zur Startseite</a></p>
 
 </body>
 </html>

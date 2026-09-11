@@ -19,29 +19,24 @@ import (
 	"github.com/maxdollinger/meeth-councile/internal/store"
 )
 
-// Memory is one persona's private store for one discussion.
+// Memory is one persona's private store.
 type Memory struct {
 	repo          *store.Memory
 	id            string
-	discussionID  string
 	persona       string
 	commonPrompt  string
 	personaPrompt string
 	logger        *slog.Logger
 }
 
-// New loads the persona's memory for discussionID, creating it on first use. The
-// prompts are snapshotted by the store at creation, so later edits to the prompt
-// files do not rewrite an existing memory.
-func New(ctx context.Context, repo *store.Memory, discussionID, persona string, opts ...Option) (*Memory, error) {
+// New loads the persona's memory, creating it on first use. The prompts are
+// snapshotted by the store at creation, so later edits to the prompt files do
+// not rewrite an existing memory.
+func New(ctx context.Context, repo *store.Memory, persona string, opts ...Option) (*Memory, error) {
 	if repo == nil {
 		return nil, errors.New("memory: store is required")
 	}
-	discussionID = strings.TrimSpace(discussionID)
 	persona = strings.TrimSpace(persona)
-	if discussionID == "" {
-		return nil, errors.New("memory: discussion id is required")
-	}
 	if persona == "" {
 		return nil, errors.New("memory: persona is required")
 	}
@@ -50,14 +45,13 @@ func New(ctx context.Context, repo *store.Memory, discussionID, persona string, 
 		return nil, err
 	}
 
-	s, err := repo.Load(ctx, discussionID, persona, prompts.Common(), personaPrompt)
+	s, err := repo.Load(ctx, persona, prompts.Common(), personaPrompt)
 	if err != nil {
 		return nil, err
 	}
 	m := &Memory{
 		repo:          repo,
 		id:            s.ID,
-		discussionID:  s.DiscussionID,
 		persona:       s.Persona,
 		commonPrompt:  s.CommonPrompt,
 		personaPrompt: s.PersonaPrompt,

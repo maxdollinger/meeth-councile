@@ -22,11 +22,11 @@ func openRepo(t *testing.T) *store.Memory {
 	return store.NewMemory(db)
 }
 
-func newMemory(t *testing.T, repo *store.Memory, discussionID, persona string) *Memory {
+func newMemory(t *testing.T, repo *store.Memory, persona string) *Memory {
 	t.Helper()
-	m, err := New(context.Background(), repo, discussionID, persona)
+	m, err := New(context.Background(), repo, persona)
 	if err != nil {
-		t.Fatalf("New(%s, %s): %v", discussionID, persona, err)
+		t.Fatalf("New(%s): %v", persona, err)
 	}
 	return m
 }
@@ -53,7 +53,7 @@ func wireOf(in llm.Input) []map[string]any {
 }
 
 func TestNewRequiresStore(t *testing.T) {
-	if _, err := New(context.Background(), nil, "d1", "realism"); err == nil {
+	if _, err := New(context.Background(), nil, "realism"); err == nil {
 		t.Fatal("nil store: want error, got nil")
 	}
 }
@@ -66,7 +66,7 @@ func TestMemoryPersistsAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	m := newMemory(t, store.NewMemory(first), "discussion-1", "realism")
+	m := newMemory(t, store.NewMemory(first), "realism")
 	if err := m.AppendAnswer(ctx, Answer{Name: "realism", Content: "moral facts exist"}); err != nil {
 		t.Fatalf("AppendAnswer: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestMemoryPersistsAcrossReopen(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer second.Close()
-	reloaded := newMemory(t, store.NewMemory(second), "discussion-1", "realism")
+	reloaded := newMemory(t, store.NewMemory(second), "realism")
 	entries, err := reloaded.Entries(ctx)
 	if err != nil {
 		t.Fatalf("Entries: %v", err)
@@ -97,8 +97,8 @@ func TestMemoryGetOrCreateAndIsolation(t *testing.T) {
 	ctx := context.Background()
 	repo := openRepo(t)
 
-	first := newMemory(t, repo, "d1", "realism")
-	second := newMemory(t, repo, "d1", "realism")
+	first := newMemory(t, repo, "realism")
+	second := newMemory(t, repo, "realism")
 	if err := first.AppendAnswer(ctx, Answer{Name: "realism", Content: "one"}); err != nil {
 		t.Fatalf("AppendAnswer: %v", err)
 	}
@@ -110,25 +110,20 @@ func TestMemoryGetOrCreateAndIsolation(t *testing.T) {
 		t.Fatalf("same persona sees %d entries, want 1", len(entries))
 	}
 
-	other := newMemory(t, repo, "d1", "expressivism")
+	other := newMemory(t, repo, "expressivism")
 	if entries, _ := other.Entries(ctx); len(entries) != 0 {
 		t.Errorf("other persona sees %d entries, want 0", len(entries))
-	}
-
-	otherDiscussion := newMemory(t, repo, "d2", "realism")
-	if entries, _ := otherDiscussion.Entries(ctx); len(entries) != 0 {
-		t.Errorf("other discussion sees %d entries, want 0", len(entries))
 	}
 }
 
 func TestMemoryRejectsUnknownPersona(t *testing.T) {
-	if _, err := New(context.Background(), openRepo(t), "d1", "nihilism"); err == nil {
+	if _, err := New(context.Background(), openRepo(t), "nihilism"); err == nil {
 		t.Fatal("unknown persona: want error, got nil")
 	}
 }
 
 func TestSystemPromptJoinsCommonAndPersona(t *testing.T) {
-	m := newMemory(t, openRepo(t), "d1", "realism")
+	m := newMemory(t, openRepo(t), "realism")
 	persona, err := prompts.Persona("realism")
 	if err != nil {
 		t.Fatalf("Persona: %v", err)
@@ -147,7 +142,7 @@ func TestSystemPromptJoinsCommonAndPersona(t *testing.T) {
 
 func TestAppendAnswerStoresFullTurn(t *testing.T) {
 	ctx := context.Background()
-	m := newMemory(t, openRepo(t), "d1", "realism")
+	m := newMemory(t, openRepo(t), "realism")
 
 	reasoning := llm.Reasoning{
 		ID:               "rs_1",
@@ -178,7 +173,7 @@ func TestAppendAnswerStoresFullTurn(t *testing.T) {
 
 func TestAppendAnswerFallsBackToContent(t *testing.T) {
 	ctx := context.Background()
-	m := newMemory(t, openRepo(t), "d1", "realism")
+	m := newMemory(t, openRepo(t), "realism")
 
 	if err := m.AppendAnswer(ctx, Answer{Name: "realism", Content: "just words"}); err != nil {
 		t.Fatalf("AppendAnswer: %v", err)
@@ -191,7 +186,7 @@ func TestAppendAnswerFallsBackToContent(t *testing.T) {
 }
 
 func TestAppendAnswerRejectsEmpty(t *testing.T) {
-	m := newMemory(t, openRepo(t), "d1", "realism")
+	m := newMemory(t, openRepo(t), "realism")
 	if err := m.AppendAnswer(context.Background(), Answer{Name: "realism"}); err == nil {
 		t.Fatal("empty answer: want error, got nil")
 	}
@@ -199,7 +194,7 @@ func TestAppendAnswerRejectsEmpty(t *testing.T) {
 
 func TestAppendUnderstandingTagsSpeakerAndKeepsSource(t *testing.T) {
 	ctx := context.Background()
-	m := newMemory(t, openRepo(t), "d1", "realism")
+	m := newMemory(t, openRepo(t), "realism")
 
 	if err := m.AppendUnderstanding(ctx, Understanding{
 		Speaker: "error-theory",
@@ -223,7 +218,7 @@ func TestAppendUnderstandingTagsSpeakerAndKeepsSource(t *testing.T) {
 
 func TestHistoryOrdersEntriesWithoutSystemOrSource(t *testing.T) {
 	ctx := context.Background()
-	m := newMemory(t, openRepo(t), "d1", "realism")
+	m := newMemory(t, openRepo(t), "realism")
 
 	if err := m.AppendAnswer(ctx, Answer{Name: "realism", Content: "first"}); err != nil {
 		t.Fatal(err)
@@ -260,7 +255,7 @@ func TestHistoryOrdersEntriesWithoutSystemOrSource(t *testing.T) {
 
 func TestHistoryReplaysTextOnlyFromStoredLoops(t *testing.T) {
 	ctx := context.Background()
-	m := newMemory(t, openRepo(t), "d1", "realism")
+	m := newMemory(t, openRepo(t), "realism")
 
 	loop := llm.Input{
 		llm.Reasoning{ID: "rs_1", Summary: []llm.ReasoningSummary{{Text: "secret reasoning"}}},
@@ -303,7 +298,7 @@ func TestHistoryReplaysTextOnlyFromStoredLoops(t *testing.T) {
 
 func TestComprehensionPromptIncludesHistoryTurnAndAnswer(t *testing.T) {
 	ctx := context.Background()
-	m := newMemory(t, openRepo(t), "d1", "realism")
+	m := newMemory(t, openRepo(t), "realism")
 
 	if err := m.AppendAnswer(ctx, Answer{Name: "realism", Content: "my earlier point"}); err != nil {
 		t.Fatal(err)

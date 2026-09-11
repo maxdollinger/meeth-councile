@@ -75,7 +75,7 @@ func TestResearchReturnsAnswerAndUsage(t *testing.T) {
 	}}
 
 	got, usage, err := New(fc, "research-model", openLog(t)).Research(
-		context.Background(), "What is the evidence?", "debating relativism", "realism",
+		context.Background(), "What is the evidence?", "realism",
 	)
 	if err != nil {
 		t.Fatalf("Research returned error: %v", err)
@@ -105,9 +105,6 @@ func TestResearchReturnsAnswerAndUsage(t *testing.T) {
 	if !strings.Contains(user.Content, "What is the evidence?") {
 		t.Errorf("user content = %q, want the question", user.Content)
 	}
-	if !strings.Contains(user.Content, "debating relativism") {
-		t.Errorf("user content = %q, want the context", user.Content)
-	}
 }
 
 func TestResearchLogsCall(t *testing.T) {
@@ -117,7 +114,7 @@ func TestResearchLogsCall(t *testing.T) {
 	}}
 	log := openLog(t)
 
-	if _, _, err := New(fc, "m", log).Research(context.Background(), "Q?", "ctx", "error-theory"); err != nil {
+	if _, _, err := New(fc, "m", log).Research(context.Background(), "Q?", "error-theory"); err != nil {
 		t.Fatalf("Research returned error: %v", err)
 	}
 
@@ -129,8 +126,8 @@ func TestResearchLogsCall(t *testing.T) {
 		t.Fatalf("entries = %d, want 1", len(entries))
 	}
 	e := entries[0]
-	if e.Caller != "error-theory" || e.Question != "Q?" || e.Context != "ctx" || e.Answer != "answer" {
-		t.Errorf("entry = %+v, want caller/question/context/answer recorded", e)
+	if e.Caller != "error-theory" || e.Question != "Q?" || e.Answer != "answer" {
+		t.Errorf("entry = %+v, want caller/question/answer recorded", e)
 	}
 	if e.Usage != usage {
 		t.Errorf("entry usage = %+v, want %+v", e.Usage, usage)
@@ -146,7 +143,7 @@ func TestResearchLogsFailure(t *testing.T) {
 	}}
 	log := openLog(t)
 
-	if _, _, err := New(fc, "m", log).Research(context.Background(), "Q?", "", "realism"); err == nil {
+	if _, _, err := New(fc, "m", log).Research(context.Background(), "Q?", "realism"); err == nil {
 		t.Fatal("expected error, got nil")
 	}
 
@@ -166,24 +163,10 @@ func TestResearchLogsFailure(t *testing.T) {
 	}
 }
 
-func TestResearchOmitsEmptyContext(t *testing.T) {
-	fc := &fakeClient{}
-	if _, _, err := New(fc, "m", openLog(t)).Research(context.Background(), "Q?", "   ", "caller"); err != nil {
-		t.Fatalf("Research returned error: %v", err)
-	}
-	user, ok := fc.calls[0].input[1].(llm.Message)
-	if !ok {
-		t.Fatalf("input[1] = %T, want llm.Message", fc.calls[0].input[1])
-	}
-	if strings.Contains(user.Content, "Context:") {
-		t.Errorf("user content = %q, want no context section", user.Content)
-	}
-}
-
 func TestResearchRequiresQuestion(t *testing.T) {
 	fc := &fakeClient{}
 	log := openLog(t)
-	if _, _, err := New(fc, "m", log).Research(context.Background(), "   ", "ctx", "caller"); err == nil {
+	if _, _, err := New(fc, "m", log).Research(context.Background(), "   ", "caller"); err == nil {
 		t.Fatal("expected error, got nil")
 	}
 	if len(fc.calls) != 0 {
@@ -202,7 +185,7 @@ func TestResearchWrapsClientError(t *testing.T) {
 	fc := &fakeClient{respond: func(fakeCall) (llm.Result, error) {
 		return llm.Result{}, errors.New("upstream down")
 	}}
-	_, _, err := New(fc, "m", openLog(t)).Research(context.Background(), "Q?", "", "caller")
+	_, _, err := New(fc, "m", openLog(t)).Research(context.Background(), "Q?", "caller")
 	if err == nil || !strings.Contains(err.Error(), "upstream down") {
 		t.Fatalf("error = %v, want the client error", err)
 	}

@@ -72,13 +72,21 @@ func (f *fakeSpeaker) Hear(_ context.Context, name, content string) (memory.Unde
 	return memory.Understanding{Speaker: name, Content: content}, nil
 }
 
+func (f *fakeSpeaker) HearDirect(_ context.Context, name, content string) (memory.Understanding, error) {
+	if f.hearErr != nil {
+		return memory.Understanding{}, f.hearErr
+	}
+	f.hears = append(f.hears, hearCall{speaker: name, content: content})
+	return memory.Understanding{Speaker: name, Content: content}, nil
+}
+
 type fakeStore struct {
 	turns   []Turn
 	entries []SpeakEntry
 	err     error
 }
 
-func (f *fakeStore) Append(_ context.Context, _ string, t Turn) error {
+func (f *fakeStore) Append(_ context.Context, t Turn) error {
 	if f.err != nil {
 		return f.err
 	}
@@ -86,7 +94,7 @@ func (f *fakeStore) Append(_ context.Context, _ string, t Turn) error {
 	return nil
 }
 
-func (f *fakeStore) AppendSpeakEntry(_ context.Context, _ string, e SpeakEntry) error {
+func (f *fakeStore) AppendSpeakEntry(_ context.Context, e SpeakEntry) error {
 	if f.err != nil {
 		return f.err
 	}
@@ -152,13 +160,6 @@ func TestNewValidation(t *testing.T) {
 	}
 }
 
-func TestRunRequiresDiscussionID(t *testing.T) {
-	d := newDiscussion(t, []Speaker{speaker("a")}, nil)
-	if _, err := d.Run(context.Background(), "  "); err == nil {
-		t.Fatal("blank discussion id: want error, got nil")
-	}
-}
-
 func TestRunAllPassEndsAfterOneRound(t *testing.T) {
 	a, b, c := speaker("a"), speaker("b"), speaker("c")
 	for _, s := range []*fakeSpeaker{a, b, c} {
@@ -166,7 +167,7 @@ func TestRunAllPassEndsAfterOneRound(t *testing.T) {
 	}
 	d := newDiscussion(t, []Speaker{a, b, c}, nil, WithRand(rand.New(rand.NewSource(1))))
 
-	res, err := d.Run(context.Background(), "d1")
+	res, err := d.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -211,7 +212,7 @@ func TestRunHearsOnlyNonPass(t *testing.T) {
 	}
 	d := newDiscussion(t, []Speaker{a, b, c}, nil, WithRand(rand.New(rand.NewSource(7))))
 
-	if _, err := d.Run(context.Background(), "d1"); err != nil {
+	if _, err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -250,7 +251,7 @@ func TestRunOrderConstraintAndPermutation(t *testing.T) {
 			roster[i] = speakers[i]
 		}
 		d := newDiscussion(t, roster, nil, WithRand(rand.New(rand.NewSource(seed))), WithMaxRounds(4))
-		res, err := d.Run(context.Background(), "d1")
+		res, err := d.Run(context.Background())
 		if err != nil {
 			t.Fatalf("seed %d: Run: %v", seed, err)
 		}
@@ -289,7 +290,7 @@ func TestRunAssignsModelPerSpeakerPerRound(t *testing.T) {
 		roster[i] = s
 	}
 	d := newDiscussion(t, roster, pool, WithRand(rand.New(rand.NewSource(3))), WithMaxRounds(3))
-	res, err := d.Run(context.Background(), "d1")
+	res, err := d.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -337,7 +338,7 @@ func TestRunMaxRoundsCap(t *testing.T) {
 	b.respond = alwaysContent
 	d := newDiscussion(t, []Speaker{a, b}, nil, WithRand(rand.New(rand.NewSource(1))), WithMaxRounds(2))
 
-	res, err := d.Run(context.Background(), "d1")
+	res, err := d.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -360,7 +361,7 @@ func TestRunStoreErrorAborts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	res, err := d.Run(context.Background(), "d1")
+	res, err := d.Run(context.Background())
 	if err == nil {
 		t.Fatal("want error, got nil")
 	}
@@ -375,7 +376,7 @@ func TestRunSpeakErrorAborts(t *testing.T) {
 	b.speakErr = errors.New("model down")
 	d := newDiscussion(t, []Speaker{a, b}, nil, WithRand(rand.New(rand.NewSource(1))))
 
-	res, err := d.Run(context.Background(), "d1")
+	res, err := d.Run(context.Background())
 	if err == nil {
 		t.Fatal("want error, got nil")
 	}
@@ -391,30 +392,31 @@ func TestRunHearErrorAborts(t *testing.T) {
 	b.hearErr = errors.New("memory down")
 	d := newDiscussion(t, []Speaker{a, b}, nil, WithRand(rand.New(rand.NewSource(1))))
 
-	if _, err := d.Run(context.Background(), "d1"); err == nil {
+	if _, err := d.Run(context.Background()); err == nil {
 		t.Fatal("want error, got nil")
 	}
 }
 
-func TestRunRecordsEverySpeakOutput(t *testing.T) {
+func TestRunRecordsOnlyAnswer(t *testing.T) {
 	a := speaker("a")
+	a.respond = func(int) (string, error) { return "the answer", nil }
 	a.output = llm.Input{
 		llm.Reasoning{Summary: []llm.ReasoningSummary{{Text: "think"}}},
 		llm.FunctionCall{CallID: "c1", Name: "research", Arguments: `{"query":"x"}`},
 		llm.FunctionCallOutput{CallID: "c1", Output: "result"},
-		llm.Assistant("answer"),
+		llm.Assistant("the answer"),
 	}
 	store := &fakeStore{}
 	d, err := New(testTopic, []Speaker{a}, []string{"m1"}, store, WithMaxRounds(1))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	res, err := d.Run(context.Background(), "d1")
+	res, err := d.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
-	wantKinds := []string{"opening", "reasoning", "tool_call", "tool_output", "message"}
+	wantKinds := []string{"opening", "message"}
 	if len(res.Entries) != len(wantKinds) {
 		t.Fatalf("entries = %d, want %d", len(res.Entries), len(wantKinds))
 	}
@@ -423,11 +425,11 @@ func TestRunRecordsEverySpeakOutput(t *testing.T) {
 			t.Errorf("entry[%d].Kind = %q, want %q", i, res.Entries[i].Kind, kind)
 		}
 	}
+	if got := res.Entries[1].Content; got != "the answer" {
+		t.Errorf("answer = %q, want the final message", got)
+	}
 	if len(store.entries) != len(wantKinds) {
 		t.Errorf("stored entries = %d, want %d", len(store.entries), len(wantKinds))
-	}
-	if got := res.Entries[3].Content; got != "result" {
-		t.Errorf("tool output = %q, want result", got)
 	}
 }
 
@@ -439,7 +441,7 @@ func TestRunMarksPassEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	res, err := d.Run(context.Background(), "d1")
+	res, err := d.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

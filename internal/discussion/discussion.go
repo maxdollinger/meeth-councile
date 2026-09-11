@@ -21,12 +21,9 @@ import (
 
 // Speak output kinds, stored in speak_entries.kind.
 const (
-	kindOpening    = "opening"
-	kindReasoning  = "reasoning"
-	kindToolCall   = "tool_call"
-	kindToolOutput = "tool_output"
-	kindMessage    = "message"
-	kindPass       = "pass"
+	kindOpening = "opening"
+	kindMessage = "message"
+	kindPass    = "pass"
 )
 
 // moderator is the speaker name of the opening topic turn.
@@ -42,8 +39,8 @@ type SpeakEntry = store.SpeakEntry
 
 // Store persists the shared transcript and every speak output.
 type Store interface {
-	Append(ctx context.Context, discussionID string, turn Turn) error
-	AppendSpeakEntry(ctx context.Context, discussionID string, entry SpeakEntry) error
+	Append(ctx context.Context, turn Turn) error
+	AppendSpeakEntry(ctx context.Context, entry SpeakEntry) error
 }
 
 // Speaker is the slice of *persona.Persona the discussion depends on.
@@ -52,6 +49,7 @@ type Speaker interface {
 	UseModel(model string) error
 	Speak(ctx context.Context) (name, content string, output llm.Input, err error)
 	Hear(ctx context.Context, name, content string) (memory.Understanding, error)
+	HearDirect(ctx context.Context, name, content string) (memory.Understanding, error)
 }
 
 // EndReason says why a discussion stopped.
@@ -145,16 +143,13 @@ func New(topic string, speakers []Speaker, models []string, store Store, opts ..
 // Run holds the discussion. It opens with every speaker hearing the topic, then
 // runs rounds until every speaker passes in one round or maxRounds is reached.
 // A speaker or store error aborts the run and returns the turns recorded so far.
-func (d *Discussion) Run(ctx context.Context, discussionID string) (Result, error) {
+func (d *Discussion) Run(ctx context.Context) (Result, error) {
 	result := Result{}
-	if strings.TrimSpace(discussionID) == "" {
-		return result, errors.New("discussion: discussion id is required")
-	}
 
-	logger := d.logger.With("discussion_id", discussionID)
+	logger := d.logger
 	logger.Info("discussion started", "topic", d.topic, "speakers", len(d.speakers), "max_rounds", d.maxRounds)
 
-	if err := d.open(ctx, discussionID, &result); err != nil {
+	if err := d.open(ctx, &result); err != nil {
 		return result, err
 	}
 
@@ -171,7 +166,7 @@ func (d *Discussion) Run(ctx context.Context, discussionID string) (Result, erro
 			if err := sp.UseModel(models[name]); err != nil {
 				return result, fmt.Errorf("discussion: set model for %s: %w", name, err)
 			}
-			speaker, content, output, err := sp.Speak(ctx)
+			speaker, content, _, err := sp.Speak(ctx)
 			if err != nil {
 				return result, fmt.Errorf("discussion: %s speaks: %w", name, err)
 			}
@@ -184,14 +179,14 @@ func (d *Discussion) Run(ctx context.Context, discussionID string) (Result, erro
 				Content: content,
 				Passed:  passed,
 			}
-			if err := d.store.Append(ctx, discussionID, turn); err != nil {
+			if err := d.store.Append(ctx, turn); err != nil {
 				return result, err
 			}
 			result.Turns = append(result.Turns, turn)
 
-			entries := speakEntries(round, speaker, models[name], passed, output)
+			entries := speakEntries(round, speaker, models[name], content, passed)
 			for _, entry := range entries {
-				if err := d.store.AppendSpeakEntry(ctx, discussionID, entry); err != nil {
+				if err := d.store.AppendSpeakEntry(ctx, entry); err != nil {
 					return result, err
 				}
 				result.Entries = append(result.Entries, entry)
@@ -230,100 +225,39 @@ func orderNames(order []Speaker) string {
 	return strings.Join(names, ",")
 }
 
-// speakEntries renders every item a speak turn produced into recordable
-// entries, in the order the loop produced them.
-func speakEntries(round int, speaker, model string, passed bool, output llm.Input) []SpeakEntry {
-	entries := make([]SpeakEntry, 0, len(output))
-	for _, item := range output {
-		if item == nil {
-			continue
-		}
-		kind, content := renderItem(item)
-		if strings.TrimSpace(content) == "" {
-			continue
-		}
-		entries = append(entries, SpeakEntry{
-			Round:     round,
-			Speaker:   speaker,
-			Model:     model,
-			Kind:      kind,
-			Content:   content,
-			CreatedAt: time.Now(),
-		})
-	}
-	if passed {
-		for i := range entries {
-			if entries[i].Kind == kindMessage {
-				entries[i].Kind = kindPass
-			}
-		}
-	}
-	return entries
-}
-
-// renderItem maps one loop item to its stored kind and display text.
-func renderItem(item llm.Item) (string, string) {
-	m := item.ResponseItem()
-	switch item.Type() {
-	case "reasoning":
-		return kindReasoning, reasoningText(m)
-	case "function_call":
-		name, _ := m["name"].(string)
-		args, _ := m["arguments"].(string)
-		return kindToolCall, strings.TrimSpace(name + " " + args)
-	case "function_call_output":
-		out, _ := m["output"].(string)
-		return kindToolOutput, out
-	case "message":
-		text, _ := m["content"].(string)
-		return kindMessage, text
-	default:
-		return item.Type(), ""
-	}
-}
-
-// reasoningText joins a reasoning item's summary and content blocks.
-func reasoningText(m map[string]any) string {
-	var parts []string
-	for _, key := range []string{"summary", "content"} {
-		for _, part := range mapSlice(m[key]) {
-			if text, ok := part["text"].(string); ok && strings.TrimSpace(text) != "" {
-				parts = append(parts, text)
-			}
-		}
-	}
-	return strings.Join(parts, "\n")
-}
-
-// mapSlice coerces a decoded JSON array into a slice of maps, accepting both
-// the in-memory []map[string]any and the []any produced by a JSON round-trip.
-func mapSlice(v any) []map[string]any {
-	switch t := v.(type) {
-	case []map[string]any:
-		return t
-	case []any:
-		out := make([]map[string]any, 0, len(t))
-		for _, e := range t {
-			if mm, ok := e.(map[string]any); ok {
-				out = append(out, mm)
-			}
-		}
-		return out
-	default:
+// speakEntries renders a speaking turn into its single recorded entry: the
+// answer, or a pass when the persona had nothing to add. A persona's reasoning
+// and tool traffic stay private to its own memory and never enter the shared
+// discussion.
+func speakEntries(round int, speaker, model, content string, passed bool) []SpeakEntry {
+	content = strings.TrimSpace(content)
+	if content == "" {
 		return nil
 	}
+	kind := kindMessage
+	if passed {
+		kind = kindPass
+	}
+	return []SpeakEntry{{
+		Round:     round,
+		Speaker:   speaker,
+		Model:     model,
+		Kind:      kind,
+		Content:   content,
+		CreatedAt: time.Now(),
+	}}
 }
 
 // open records the moderator opening and has every speaker hear it.
-func (d *Discussion) open(ctx context.Context, discussionID string, result *Result) error {
+func (d *Discussion) open(ctx context.Context, result *Result) error {
 	turn := Turn{Speaker: moderator, Content: d.topic}
-	if err := d.store.Append(ctx, discussionID, turn); err != nil {
+	if err := d.store.Append(ctx, turn); err != nil {
 		return err
 	}
 	result.Turns = append(result.Turns, turn)
 
 	entry := SpeakEntry{Speaker: moderator, Kind: kindOpening, Content: d.topic, CreatedAt: time.Now()}
-	if err := d.store.AppendSpeakEntry(ctx, discussionID, entry); err != nil {
+	if err := d.store.AppendSpeakEntry(ctx, entry); err != nil {
 		return err
 	}
 	result.Entries = append(result.Entries, entry)
@@ -332,11 +266,11 @@ func (d *Discussion) open(ctx context.Context, discussionID string, result *Resu
 		if err := sp.UseModel(d.pickModel()); err != nil {
 			return fmt.Errorf("discussion: set model for %s: %w", sp.Name(), err)
 		}
-		if _, err := sp.Hear(ctx, moderator, d.topic); err != nil {
+		if _, err := sp.HearDirect(ctx, moderator, d.topic); err != nil {
 			return fmt.Errorf("discussion: %s hears the opening: %w", sp.Name(), err)
 		}
 	}
-	d.logger.Debug("opening heard", "discussion_id", discussionID, "speakers", len(d.speakers))
+	d.logger.Debug("opening heard", "speakers", len(d.speakers))
 	return nil
 }
 

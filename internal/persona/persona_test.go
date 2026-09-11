@@ -1,8 +1,10 @@
 package persona
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,9 +35,8 @@ func (f *fakeClient) Response(model string, input llm.Input, opts ...llm.Respons
 }
 
 type researchCall struct {
-	question   string
-	background string
-	caller     string
+	question string
+	caller   string
 }
 
 type fakeResearcher struct {
@@ -44,8 +45,8 @@ type fakeResearcher struct {
 	err    error
 }
 
-func (f *fakeResearcher) Research(_ context.Context, question, background, caller string) (string, llm.Usage, error) {
-	f.calls = append(f.calls, researchCall{question: question, background: background, caller: caller})
+func (f *fakeResearcher) Research(_ context.Context, question, caller string) (string, llm.Usage, error) {
+	f.calls = append(f.calls, researchCall{question: question, caller: caller})
 	return f.answer, llm.Usage{}, f.err
 }
 
@@ -56,7 +57,7 @@ func newMemory(t *testing.T, persona string) *memory.Memory {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	m, err := memory.New(context.Background(), store.NewMemory(db), "d1", persona)
+	m, err := memory.New(context.Background(), store.NewMemory(db), persona)
 	if err != nil {
 		t.Fatalf("memory.New: %v", err)
 	}
@@ -102,12 +103,9 @@ func TestNewValidation(t *testing.T) {
 	}
 }
 
-func TestUnderstandIsSingleCompletionBeforeLoop(t *testing.T) {
-	fc := &fakeClient{respond: func(_ fakeCall, n int) (llm.Result, error) {
-		if n == 1 {
-			return llm.Result{Text: "my summary"}, nil
-		}
-		return llm.Result{Text: "settled understanding"}, nil
+func TestHearIsSingleComprehension(t *testing.T) {
+	fc := &fakeClient{respond: func(_ fakeCall, _ int) (llm.Result, error) {
+		return llm.Result{Text: "my summary"}, nil
 	}}
 	p, err := New(newMemory(t, "realism"), fc, "m", &fakeResearcher{})
 	if err != nil {
@@ -118,30 +116,27 @@ func TestUnderstandIsSingleCompletionBeforeLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Hear: %v", err)
 	}
-	if u.Content != "settled understanding" {
-		t.Errorf("Content = %q, want the loop's settled text", u.Content)
+	if u.Content != "my summary" {
+		t.Errorf("Content = %q, want the comprehension summary", u.Content)
 	}
 
-	if len(fc.calls) != 2 {
-		t.Fatalf("model calls = %d, want 2 (understand + loop)", len(fc.calls))
+	if len(fc.calls) != 1 {
+		t.Fatalf("model calls = %d, want 1 (a single comprehension)", len(fc.calls))
 	}
 	last := fc.calls[0].input[len(fc.calls[0].input)-1]
 	msg, ok := last.(llm.Message)
-	if !ok || msg.Role != llm.RoleUser || !strings.Contains(msg.Content, "record what you now understand") {
-		t.Errorf("first call's last item = %#v, want the comprehension instruction", last)
+	if !ok || msg.Role != llm.RoleUser || !strings.Contains(msg.Content, "Halte in deinen eigenen Worten fest") {
+		t.Errorf("call's last item = %#v, want the comprehension instruction", last)
 	}
 	first := fc.calls[0].input[0]
 	if sys, ok := first.(llm.Message); !ok || sys.Role != llm.RoleSystem {
-		t.Errorf("first call's first item = %#v, want the system prompt", first)
+		t.Errorf("call's first item = %#v, want the system prompt", first)
 	}
 }
 
-func TestHearStoresHeardTurnThenLoop(t *testing.T) {
-	fc := &fakeClient{respond: func(_ fakeCall, n int) (llm.Result, error) {
-		if n == 1 {
-			return llm.Result{Text: "summary"}, nil
-		}
-		return llm.Result{Text: "settled understanding"}, nil
+func TestHearStoresUnderstandingOnly(t *testing.T) {
+	fc := &fakeClient{respond: func(_ fakeCall, _ int) (llm.Result, error) {
+		return llm.Result{Text: "summary"}, nil
 	}}
 	mem := newMemory(t, "realism")
 	p, err := New(mem, fc, "m", &fakeResearcher{})
@@ -156,9 +151,8 @@ func TestHearStoresHeardTurnThenLoop(t *testing.T) {
 	if u.Speaker != "error-theory" || u.Source != "there are no moral facts" {
 		t.Errorf("Understanding = %+v, want speaker and raw source kept", u)
 	}
-	wantLoop := wireJSON(t, llm.Input{llm.Assistant("settled understanding")})
-	if got := wireJSON(t, u.Items); got != wantLoop {
-		t.Errorf("Items = %s, want only the new loop %s", got, wantLoop)
+	if len(u.Items) != 0 {
+		t.Errorf("Items = %v, want none without a hear loop", u.Items)
 	}
 
 	entries, err := mem.Entries(context.Background())
@@ -173,26 +167,49 @@ func TestHearStoresHeardTurnThenLoop(t *testing.T) {
 		t.Errorf("entry = %+v, want understanding by error-theory", e)
 	}
 	want := wireJSON(t, llm.Input{
-		llm.User("error-theory: settled understanding"),
-		llm.Assistant("settled understanding"),
+		llm.User("error-theory: summary"),
 	})
 	if got := wireJSON(t, e.Items); got != want {
-		t.Errorf("stored items = %s, want heard turn then loop %s", got, want)
+		t.Errorf("stored items = %s, want the labeled understanding %s", got, want)
 	}
 }
 
-func TestHearLoopCanUseResearchTool(t *testing.T) {
-	fc := &fakeClient{respond: func(_ fakeCall, n int) (llm.Result, error) {
-		switch n {
-		case 1:
-			return llm.Result{Text: "summary"}, nil
-		case 2:
-			return llm.Result{ToolCalls: []llm.ToolCall{
-				{ID: "fc_1", CallID: "call_1", Name: "research_assistant", Arguments: `{"query":"cases of moral disagreement"}`},
-			}}, nil
-		default:
-			return llm.Result{Text: "understanding after research"}, nil
-		}
+func TestHearDirectStoresQuestionWithoutModelCall(t *testing.T) {
+	ctx := context.Background()
+	fc := &fakeClient{}
+	mem := newMemory(t, "realism")
+	p, err := New(mem, fc, "m", &fakeResearcher{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	question := "Are there mind-independent moral facts?"
+	u, err := p.HearDirect(ctx, "moderator", question)
+	if err != nil {
+		t.Fatalf("HearDirect: %v", err)
+	}
+	if u.Content != question || u.Source != question {
+		t.Errorf("Understanding = %+v, want the question verbatim", u)
+	}
+	if len(fc.calls) != 0 {
+		t.Errorf("model calls = %d, want 0 for a direct hear", len(fc.calls))
+	}
+
+	entries, err := mem.Entries(ctx)
+	if err != nil {
+		t.Fatalf("Entries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if entries[0].Kind != memory.KindUnderstanding || entries[0].Content != question {
+		t.Errorf("entry = %+v, want the stored question", entries[0])
+	}
+}
+
+func TestHearDoesNotUseResearchTool(t *testing.T) {
+	fc := &fakeClient{respond: func(_ fakeCall, _ int) (llm.Result, error) {
+		return llm.Result{Text: "summary"}, nil
 	}}
 	rc := &fakeResearcher{answer: "the researched facts"}
 	mem := newMemory(t, "realism")
@@ -201,27 +218,14 @@ func TestHearLoopCanUseResearchTool(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	u, err := p.Hear(context.Background(), "expressivism", "morality is just attitude")
-	if err != nil {
+	if _, err := p.Hear(context.Background(), "expressivism", "morality is just attitude"); err != nil {
 		t.Fatalf("Hear: %v", err)
 	}
-	if len(rc.calls) != 1 {
-		t.Fatalf("research calls = %d, want 1", len(rc.calls))
+	if len(rc.calls) != 0 {
+		t.Fatalf("research calls = %d, want 0 in Hear", len(rc.calls))
 	}
-	if rc.calls[0].question != "cases of moral disagreement" || rc.calls[0].caller != "realism" {
-		t.Errorf("research call = %+v, want decoded query and persona as caller", rc.calls[0])
-	}
-	if u.Content != "understanding after research" {
-		t.Errorf("Content = %q, want the post-research text", u.Content)
-	}
-	if len(u.Items) != 3 {
-		t.Fatalf("Items = %d, want function_call, output, assistant", len(u.Items))
-	}
-	if _, ok := u.Items[0].(llm.FunctionCall); !ok {
-		t.Errorf("Items[0] = %T, want FunctionCall", u.Items[0])
-	}
-	if _, ok := u.Items[1].(llm.FunctionCallOutput); !ok {
-		t.Errorf("Items[1] = %T, want FunctionCallOutput", u.Items[1])
+	if len(fc.calls) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(fc.calls))
 	}
 }
 
@@ -287,8 +291,6 @@ func TestSpeakReadsPriorMemoryWithoutDuplicatingIt(t *testing.T) {
 		switch n {
 		case 1:
 			return llm.Result{Text: "summary"}, nil
-		case 2:
-			return llm.Result{Text: "settled understanding"}, nil
 		default:
 			return llm.Result{Text: "my reply"}, nil
 		}
@@ -318,14 +320,59 @@ func TestSpeakReadsPriorMemoryWithoutDuplicatingIt(t *testing.T) {
 		t.Errorf("answer items = %s, want only the new loop %s", got, want)
 	}
 
-	speakInput := fc.calls[2].input
+	speakInput := fc.calls[1].input
 	found := false
 	for _, item := range speakInput {
-		if s, ok := item.ResponseItem()["content"].(string); ok && strings.Contains(s, "error-theory: settled understanding") {
+		if s, ok := item.ResponseItem()["content"].(string); ok && strings.Contains(s, "error-theory: summary") {
 			found = true
 		}
 	}
 	if !found {
 		t.Error("Speak input missing the prior understanding from memory")
+	}
+}
+
+func TestLogsPersonaAndCurrentModelOnce(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	fc := &fakeClient{respond: func(_ fakeCall, _ int) (llm.Result, error) {
+		return llm.Result{Text: "summary"}, nil
+	}}
+	p, err := New(newMemory(t, "realism"), fc, "m1", &fakeResearcher{}, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := p.Hear(context.Background(), "error-theory", "no moral facts"); err != nil {
+		t.Fatalf("Hear: %v", err)
+	}
+	if err := p.UseModel("m2"); err != nil {
+		t.Fatalf("UseModel: %v", err)
+	}
+	if _, _, _, err := p.Speak(context.Background()); err != nil {
+		t.Fatalf("Speak: %v", err)
+	}
+
+	lines := 0
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		lines++
+		if got := strings.Count(line, "persona="); got != 1 {
+			t.Errorf("persona logged %d times, want 1: %s", got, line)
+		}
+		if got := strings.Count(line, "model="); got != 1 {
+			t.Errorf("model logged %d times, want 1: %s", got, line)
+		}
+	}
+	if lines == 0 {
+		t.Fatal("no log records written")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "persona=realism") {
+		t.Errorf("logs missing the persona name:\n%s", out)
+	}
+	if !strings.Contains(out, "model=m1") || !strings.Contains(out, "model=m2") {
+		t.Errorf("logs should show m1 before and m2 after the switch:\n%s", out)
 	}
 }

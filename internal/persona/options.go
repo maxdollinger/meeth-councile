@@ -10,11 +10,12 @@ import (
 type Option func(*Persona)
 
 // WithLogger sets the logger used to record the persona's model calls. The
-// persona name is attached to every record. A nil logger is ignored.
+// persona name and the model currently in use are attached to every record. A
+// nil logger is ignored.
 func WithLogger(logger *slog.Logger) Option {
 	return func(p *Persona) {
 		if logger != nil {
-			p.logger = logger.With("persona", p.name)
+			p.baseLogger = logger
 		}
 	}
 }

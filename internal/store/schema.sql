@@ -1,12 +1,10 @@
--- Persona memories: one row per (discussion, persona).
+-- Persona memories: one row per persona. There is a single discussion, so the
+-- persona name alone identifies a memory.
 CREATE TABLE IF NOT EXISTS memories (
-    id             TEXT PRIMARY KEY,
-    discussion_id  TEXT NOT NULL,
-    persona        TEXT NOT NULL,
+    persona        TEXT PRIMARY KEY,
     common_prompt  TEXT NOT NULL,
     persona_prompt TEXT NOT NULL,
-    created_at     INTEGER NOT NULL,
-    UNIQUE (discussion_id, persona)
+    created_at     INTEGER NOT NULL
 );
 
 -- Memory entries: a persona's own turns and its understandings of what it heard.
@@ -14,7 +12,7 @@ CREATE TABLE IF NOT EXISTS memories (
 -- items is the full agent loop, kept for audit but never replayed into history.
 CREATE TABLE IF NOT EXISTS entries (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    memory_id  TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    memory_id  TEXT NOT NULL REFERENCES memories(persona) ON DELETE CASCADE,
     seq        INTEGER NOT NULL,
     kind       TEXT NOT NULL,
     speaker    TEXT NOT NULL,
@@ -30,7 +28,6 @@ CREATE INDEX IF NOT EXISTS idx_entries_memory_seq ON entries (memory_id, seq);
 -- Shared discussion transcript: one row per turn, in speaking order.
 CREATE TABLE IF NOT EXISTS turns (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    discussion_id TEXT NOT NULL,
     round         INTEGER NOT NULL,
     turn          INTEGER NOT NULL,
     speaker       TEXT NOT NULL,
@@ -38,17 +35,16 @@ CREATE TABLE IF NOT EXISTS turns (
     content       TEXT NOT NULL,
     passed        INTEGER NOT NULL DEFAULT 0,
     created_at    INTEGER NOT NULL,
-    UNIQUE (discussion_id, round, turn)
+    UNIQUE (round, turn)
 );
 
-CREATE INDEX IF NOT EXISTS idx_turns_discussion_round ON turns (discussion_id, round, turn);
+CREATE INDEX IF NOT EXISTS idx_turns_round ON turns (round, turn);
 
 -- Every output item a speak turn produced (reasoning, tool calls, tool
 -- outputs, messages), in the order it was produced. The web transcript renders
 -- these ordered by time rather than only the completed turns.
 CREATE TABLE IF NOT EXISTS speak_entries (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    discussion_id TEXT NOT NULL,
     round         INTEGER NOT NULL,
     speaker       TEXT NOT NULL,
     model         TEXT NOT NULL DEFAULT '',
@@ -57,14 +53,13 @@ CREATE TABLE IF NOT EXISTS speak_entries (
     created_at    INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_speak_entries_discussion ON speak_entries (discussion_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_speak_entries_time ON speak_entries (created_at, id);
 
 -- Research assistant audit log: every tool call, its caller, and its output.
 CREATE TABLE IF NOT EXISTS research_log (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     caller        TEXT NOT NULL,
     question      TEXT NOT NULL,
-    context       TEXT,
     answer        TEXT,
     input_tokens  INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,

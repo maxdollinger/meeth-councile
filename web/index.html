@@ -10,19 +10,60 @@
 
 <header>
   <h1>Ein Gespräch über Metaethik, geführt von fünf KI-Persönlichkeiten</h1>
-  <p class="tagline">fünf Positionen &middot; ein Gespräch &middot; ohne Moderation</p>
+  <p class="tagline">fünf Positionen &middot; mehrere Runden &middot; ohne Moderation</p>
 </header>
 
 <main>
   <p>
     Fünf KI-Persönlichkeiten, jede mit einer eigenen moralphilosophischen
-    Position, sprechen so lange miteinander, bis ihnen nichts mehr zu sagen
-    bleibt. Niemand moderiert, niemand greift ein. Der einzige feste Punkt ist
-    die Ausgangsfrage, die jede von ihnen über das gesamte Gespräch hinweg
-    begleitet.
+    Position, diskutieren die Kernfrage der Metaethik: Behaupten wir eine
+    Tatsache, wenn wir eine Handlung &bdquo;moralisch falsch&ldquo; nennen —
+    oder tun wir etwas ganz anderes? Niemand moderiert, niemand greift ein.
+    Der einzige feste Punkt ist die Ausgangsfrage, die jede Persönlichkeit
+    über das gesamte Gespräch hinweg begleitet. Die Persönlichkeiten hören sie
+    wörtlich, nicht als Auslegung.
   </p>
 
-  <h2>Die Idee</h2>
+  <h2>Die Positionen</h2>
+  <ul>
+    {{range .Personas}}
+    <li><b>{{.Name}}</b> &middot; <span>{{.Theory}}</span></li>
+    {{end}}
+  </ul>
+
+  <h2>So läuft das Gespräch ab</h2>
+  <p>
+    Gesprochen wird in Runden. In jeder Runde kommt jede Persönlichkeit genau
+    einmal zu Wort, und die Reihenfolge wird für jede Runde neu ausgelost. Wer
+    spricht, entwickelt einen Gedanken samt Begründung und kann auf das eingehen,
+    was die anderen gesagt haben. Wer in einer Runde wirklich nichts beizutragen
+    hat, passt — und ein solcher Beitrag zählt für die anderen als nicht gesagt.
+  </p>
+  <p>
+    Das Gespräch endet, wenn in einer ganzen Runde alle passen: dann ist allen
+    nichts mehr zu sagen. Damit ein Lauf nicht endlos wird, gibt es zusätzlich
+    eine Obergrenze für die Zahl der Runden.
+  </p>
+
+  <h2>Zufällige Modelle</h2>
+  <p>
+    Hinter den fünf Persönlichkeiten steht nicht fest dieselbe KI. Jede Runde
+    wird jeder Persönlichkeit neu zufällig eines von vier Sprachmodellen
+    zugewiesen. Dieselbe Position kann also in der nächsten Runde von einem
+    anderen Modell vertreten werden. Was bleibt, ist allein die Erinnerung der
+    Persönlichkeit — nicht das Modell, das gerade für sie spricht.
+  </p>
+  <ul class="models">
+    {{range .Models}}
+    <li><code>{{.}}</code></li>
+    {{end}}
+  </ul>
+  <p>
+    Der Recherche-Assistent läuft auf einem eigenen, schnelleren Modell:
+    <code>{{.ResearchModel}}</code>.
+  </p>
+
+  <h2>Die Idee: persönliche Erinnerung</h2>
   <p>
     Das Spannende liegt nicht im gemeinsamen Wortlaut, sondern in dem, was in
     jeder einzelnen Persönlichkeit davon übrig bleibt. Zuhören heißt hier
@@ -44,6 +85,22 @@
     So entsteht ein Austausch, der aus Sicht jeder Beteiligten aufrichtig ist:
     Zwei Persönlichkeiten können dieselbe Aussage unterschiedlich verstehen und
     daraus auseinanderlaufende Schlüsse ziehen. Genau diese Reibung ist gewollt.
+  </p>
+
+  <h2>Recherche</h2>
+  <p>
+    Wenn eine Persönlichkeit eine konkrete Tatsache oder einen Fall braucht,
+    kann sie einen Recherche-Assistenten beauftragen. Der sucht im Web, liest
+    Seiten und liefert eine kurze, zusammengefasste Antwort — keine Quellen,
+    keine Rohdaten. Die Antwort ist nur ein Input für die Argumentation; die
+    Persönlichkeit verarbeitet sie in ihren eigenen Worten. Auch diese Recherche
+    bleibt privat, wie alles, was eine Persönlichkeit erfährt.
+  </p>
+
+  <p>
+    Für die Zuschauer werden die Beiträge in der Reihenfolge ihres Entstehens
+    protokolliert. Dieses Protokoll dient nur der Beobachtung — die
+    Persönlichkeiten selbst sehen es nie.
   </p>
 
   <hr>
