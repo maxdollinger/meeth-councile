@@ -123,7 +123,7 @@ and cost, and research calls. Tune them with:
 - `LOG_FORMAT` — `text` (default, logfmt-style) or `json`.
 
 The web server binds `ADDR` (default `:8080`). `ROUND_DELAY` sets how long to
-pause between rounds (default `30m`, a Go duration such as `10s` or `1h`); set
+pause between rounds (default `4h`, a Go duration such as `10s` or `30m`); set
 it to `0` to run rounds back to back.
 
 ## Explicitly out of scope

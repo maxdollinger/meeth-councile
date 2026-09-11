@@ -42,6 +42,13 @@ h1 {
   letter-spacing: 0.02em;
 }
 
+.round {
+  margin: 0.5rem 0 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .cta { margin: 1.5rem 0 0; }
 
 .cta a {

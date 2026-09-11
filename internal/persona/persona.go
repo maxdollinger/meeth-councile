@@ -28,7 +28,7 @@ const (
 	researchTool    = "research_assistant"
 
 	// speakInstruction is appended to the persona's history to elicit a turn.
-	speakInstruction = "Du bist an der Reihe. Antworte auf die bisherige Diskussion mit deiner eigenen Stimme."
+	speakInstruction = "Du bist an der Reihe. Antworte mit deiner eigenen Stimme, so kurz wie möglich und so lang wie für einen sauberen Nachvollzug nötig."
 )
 
 // CompletionClient is the slice of *llm.Client this package depends on, kept as

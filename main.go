@@ -42,7 +42,8 @@ Legt eure Position dar, geht auf das ein, was die anderen sagen, und lasst euch 
 	defaultResearchModel = "deepseek/deepseek-v4-flash-0731"
 	defaultDBPath        = "debate.db"
 	defaultAddr          = ":8080"
-	defaultRoundDelay    = 30 * time.Minute
+	defaultRoundDelay    = 4 * time.Hour
+	maxRounds            = 100
 )
 
 func main() {
@@ -101,7 +102,7 @@ func main() {
 
 	d, err := discussion.New(
 		topic, speakers, models, turns,
-		discussion.WithMaxRounds(100),
+		discussion.WithMaxRounds(maxRounds),
 		discussion.WithRoundDelay(roundDelay),
 		discussion.WithLogger(logger),
 	)
@@ -125,6 +126,8 @@ func main() {
 		personas:      defs,
 		models:        models,
 		researchModel: researchModel,
+		maxRounds:     maxRounds,
+		roundDelay:    roundDelay,
 		logger:        logger,
 	}
 	srv.running.Store(true)
@@ -180,15 +183,19 @@ type server struct {
 	personas      []prompts.Definition
 	models        []string
 	researchModel string
+	maxRounds     int
+	roundDelay    time.Duration
 	logger        *slog.Logger
 	running       atomic.Bool
 }
 
 // discussionView is the data the discussion.html template renders.
 type discussionView struct {
-	Title   string
-	Entries []store.SpeakEntry
-	Running bool
+	Title     string
+	Entries   []store.SpeakEntry
+	Running   bool
+	Round     int
+	MaxRounds int
 }
 
 // indexView is the data the index.html template renders.
@@ -196,6 +203,7 @@ type indexView struct {
 	Personas      []prompts.Definition
 	Models        []string
 	ResearchModel string
+	RoundDelay    string
 }
 
 // index returns the handler that renders the landing page with the roster of
@@ -207,6 +215,7 @@ func (s *server) index(tmpl *template.Template) http.HandlerFunc {
 			Personas:      s.personas,
 			Models:        s.models,
 			ResearchModel: s.researchModel,
+			RoundDelay:    formatDelay(s.roundDelay),
 		}); err != nil {
 			s.logger.Error("render index", "err", err)
 		}
@@ -223,15 +232,60 @@ func (s *server) handle(tmpl *template.Template) http.HandlerFunc {
 			http.Error(w, "could not load the discussion", http.StatusInternalServerError)
 			return
 		}
+		round := currentRound(entries)
+		if round == 0 {
+			round = 1
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := tmpl.Execute(w, discussionView{
-			Title:   s.title,
-			Entries: entries,
-			Running: s.running.Load(),
+			Title:     s.title,
+			Entries:   entries,
+			Running:   s.running.Load(),
+			Round:     round,
+			MaxRounds: s.maxRounds,
 		}); err != nil {
 			s.logger.Error("render discussion", "err", err)
 		}
 	}
+}
+
+// formatDelay renders a round delay as readable German, e.g. "4 Stunden" or
+// "1 Stunde 30 Minuten".
+func formatDelay(d time.Duration) string {
+	if d <= 0 {
+		return "keine Pause"
+	}
+	hours := int(d / time.Hour)
+	minutes := int(d % time.Hour / time.Minute)
+	switch {
+	case hours > 0 && minutes > 0:
+		return fmt.Sprintf("%s %s", plural(hours, "Stunde", "Stunden"), plural(minutes, "Minute", "Minuten"))
+	case hours > 0:
+		return plural(hours, "Stunde", "Stunden")
+	case minutes > 0:
+		return plural(minutes, "Minute", "Minuten")
+	default:
+		return d.String()
+	}
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+// currentRound returns the highest round among the recorded entries, or 0 when
+// only the moderator opening exists.
+func currentRound(entries []store.SpeakEntry) int {
+	round := 0
+	for _, e := range entries {
+		if e.Round > round {
+			round = e.Round
+		}
+	}
+	return round
 }
 
 // printTranscript writes every speak entry, with its time, to stdout.
