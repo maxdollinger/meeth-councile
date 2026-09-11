@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 )
@@ -63,6 +64,8 @@ type request struct {
 	Tools           []toolWire       `json:"tools,omitempty"`
 	ToolChoice      string           `json:"tool_choice,omitempty"`
 	Include         []string         `json:"include,omitempty"`
+
+	ctx context.Context `json:"-"`
 }
 
 type rawResponse struct {

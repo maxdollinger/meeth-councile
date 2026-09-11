@@ -1,7 +1,17 @@
 package llm
 
+import "context"
+
 // ResponseOption adjusts a single /responses request.
 type ResponseOption func(*request)
+
+// WithContext attaches ctx to the request so the HTTP call can be cancelled or
+// time-limited. Without it, Response uses context.Background.
+func WithContext(ctx context.Context) ResponseOption {
+	return func(r *request) {
+		r.ctx = ctx
+	}
+}
 
 // WithMaxOutputTokens caps the number of tokens the model may generate.
 func WithMaxOutputTokens(n int) ResponseOption {

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,7 +48,7 @@ func (c *Client) Response(model string, input Input, opts ...ResponseOption) (Re
 		opt(&req)
 	}
 
-	raw, err := c.do(req)
+	raw, err := c.do(req.ctx, req)
 	if err != nil {
 		return Result{}, err
 	}
@@ -62,13 +63,17 @@ func (c *Client) Response(model string, input Input, opts ...ResponseOption) (Re
 // do sends body to the /responses endpoint and returns the raw response body.
 // It owns request construction, headers, transport, and HTTP-status errors so
 // that every OpenRouter call site shares one implementation.
-func (c *Client) do(body any) ([]byte, error) {
+func (c *Client) do(ctx context.Context, body any) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("llm: marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/responses", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/responses", bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("llm: build request: %w", err)
 	}

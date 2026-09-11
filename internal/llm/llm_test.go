@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 )
+
+type ctxKey struct{}
 
 func newTestClient(t *testing.T, srv *httptest.Server) *Client {
 	t.Helper()
@@ -369,6 +372,24 @@ func TestResponseParsesFunctionCalls(t *testing.T) {
 	}
 }
 
+func TestItemTypes(t *testing.T) {
+	items := []Item{
+		Message{},
+		FunctionCall{},
+		FunctionCallOutput{},
+		Reasoning{},
+	}
+	want := []string{"message", "function_call", "function_call_output", "reasoning"}
+	for i, item := range items {
+		if got := item.Type(); got != want[i] {
+			t.Errorf("%T.Type() = %q, want %q", item, got, want[i])
+		}
+		if got := item.ResponseItem()["type"]; got != want[i] {
+			t.Errorf("%T wire type = %q, want %q", item, got, want[i])
+		}
+	}
+}
+
 func TestInputWire(t *testing.T) {
 	in := Input{
 		System("persona"),
@@ -585,6 +606,45 @@ func TestResponseSendsInclude(t *testing.T) {
 	include, ok := gotBody["include"].([]any)
 	if !ok || len(include) != 1 || include[0] != "reasoning.encrypted_content" {
 		t.Errorf("include = %v, want [reasoning.encrypted_content]", gotBody["include"])
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestResponsePropagatesContext(t *testing.T) {
+	var got any
+	c := New("test-key", &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		got = r.Context().Value(ctxKey{})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp-1","model":"gpt-4","output":[]}`)),
+		}, nil
+	})})
+	c.baseURL = "http://example.test"
+
+	ctx := context.WithValue(context.Background(), ctxKey{}, "trace")
+	if _, err := c.Response("gpt-4", Input{User("hi")}, WithContext(ctx)); err != nil {
+		t.Fatalf("Response returned error: %v", err)
+	}
+	if got != "trace" {
+		t.Errorf("context value = %v, want trace", got)
+	}
+}
+
+func TestResponseCanceledContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"id":"resp-1","model":"gpt-4","output":[]}`)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := newTestClient(t, srv).Response("gpt-4", Input{User("hi")}, WithContext(ctx))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
 

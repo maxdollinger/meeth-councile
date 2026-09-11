@@ -11,8 +11,11 @@ const (
 
 // Item is one entry in the /responses `input` array. Concrete conversation
 // types participate by implementing ResponseItem; the built-in types are
-// Message, FunctionCall, and FunctionCallOutput.
+// Message, FunctionCall, FunctionCallOutput, and Reasoning.
 type Item interface {
+	// Type returns the wire type discriminator ("message", "function_call",
+	// "function_call_output", "reasoning") so callers can tell items apart.
+	Type() string
 	// ResponseItem returns the JSON wire object for this input item.
 	ResponseItem() map[string]any
 }
@@ -40,9 +43,11 @@ type Message struct {
 	Content string
 }
 
+func (m Message) Type() string { return "message" }
+
 func (m Message) ResponseItem() map[string]any {
 	return map[string]any{
-		"type":    "message",
+		"type":    m.Type(),
 		"role":    string(m.Role),
 		"content": m.Content,
 	}
@@ -57,9 +62,11 @@ type FunctionCall struct {
 	Arguments string
 }
 
+func (f FunctionCall) Type() string { return "function_call" }
+
 func (f FunctionCall) ResponseItem() map[string]any {
 	item := map[string]any{
-		"type":      "function_call",
+		"type":      f.Type(),
 		"call_id":   f.CallID,
 		"name":      f.Name,
 		"arguments": f.Arguments,
@@ -77,9 +84,11 @@ type FunctionCallOutput struct {
 	Output string
 }
 
+func (f FunctionCallOutput) Type() string { return "function_call_output" }
+
 func (f FunctionCallOutput) ResponseItem() map[string]any {
 	return map[string]any{
-		"type":    "function_call_output",
+		"type":    f.Type(),
 		"call_id": f.CallID,
 		"output":  f.Output,
 	}
@@ -108,6 +117,8 @@ type Reasoning struct {
 	Signature        string
 }
 
+func (r Reasoning) Type() string { return "reasoning" }
+
 func (r Reasoning) ResponseItem() map[string]any {
 	summary := make([]map[string]any, 0, len(r.Summary))
 	for _, s := range r.Summary {
@@ -115,7 +126,7 @@ func (r Reasoning) ResponseItem() map[string]any {
 	}
 
 	item := map[string]any{
-		"type":    "reasoning",
+		"type":    r.Type(),
 		"id":      r.ID,
 		"summary": summary,
 	}
