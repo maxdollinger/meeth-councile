@@ -1,5 +1,8 @@
 # Metaethics Debate — Multi-Agent LLM Discussion
 
+> ⚠️ **BIG WARNING: THIS ENTIRE PROJECT IS VIBE-CODED.**  
+> Its sole purpose was a proof-of-concept (POC) for **individual per-agent memory** — nothing more. Expect rough edges, zero production polish, and architecture that was iterated on in real time with an LLM. Do not use as a reference for how to build serious systems.
+
 Five LLM agents, each arguing from a distinct metaethical position, hold a
 multi-round discussion on a given topic. No agent framework — this is plain
 orchestration logic around chat-completion calls, since the requirements
@@ -125,20 +128,3 @@ and cost, and research calls. Tune them with:
 The web server binds `ADDR` (default `:8080`). `ROUND_DELAY` sets how long to
 pause between rounds (default `4h`, a Go duration such as `10s` or `30m`); set
 it to `0` to run rounds back to back.
-
-## Explicitly out of scope
-
-Streaming, an agent framework, RAG/embedding retrieval, tools beyond the
-research assistant, a dynamic/LLM-driven moderator. None of it is needed for
-this shape of project.
-
-## Build order
-
-1. LiteLLM + tool clients — bare "send messages, get completion" plumbing. Done.
-2. Single-turn agent: tool loop resolved, PASS detected. Done.
-3. Per-persona memory: SQLite persistence, system-prompt assembly, stored
-   answers and personalized understandings. Done.
-4. Persona: `Speak`/`Hear`, wiring the comprehension call and the research tool.
-5. Round loop: shuffle, no-repeat boundary check, PASS/end-condition logic.
-6. Research assistant as a nested agent plus its audit log.
-7. Output/logging.
