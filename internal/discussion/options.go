@@ -3,6 +3,7 @@ package discussion
 import (
 	"log/slog"
 	"math/rand"
+	"time"
 )
 
 // Option configures a Discussion.
@@ -33,6 +34,17 @@ func WithRand(r *rand.Rand) Option {
 	return func(d *Discussion) {
 		if r != nil {
 			d.rng = r
+		}
+	}
+}
+
+// WithRoundDelay pauses for delay after each completed round before the next one
+// begins, stretching the discussion out. Values below 1 are ignored, leaving no
+// pause.
+func WithRoundDelay(delay time.Duration) Option {
+	return func(d *Discussion) {
+		if delay > 0 {
+			d.roundDelay = delay
 		}
 	}
 }

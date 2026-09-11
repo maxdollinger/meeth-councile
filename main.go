@@ -42,6 +42,7 @@ Legt eure Position dar, geht auf das ein, was die anderen sagen, und lasst euch 
 	defaultResearchModel = "deepseek/deepseek-v4-flash-0731"
 	defaultDBPath        = "debate.db"
 	defaultAddr          = ":8080"
+	defaultRoundDelay    = 30 * time.Minute
 )
 
 func main() {
@@ -57,6 +58,10 @@ func main() {
 	dbPath := env("DB_PATH", defaultDBPath)
 	researchModel := env("RESEARCH_MODEL", defaultResearchModel)
 	addr := env("ADDR", defaultAddr)
+	roundDelay, err := time.ParseDuration(env("ROUND_DELAY", defaultRoundDelay.String()))
+	if err != nil {
+		fatal(logger, "parse ROUND_DELAY", "err", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -97,6 +102,7 @@ func main() {
 	d, err := discussion.New(
 		topic, speakers, models, turns,
 		discussion.WithMaxRounds(100),
+		discussion.WithRoundDelay(roundDelay),
 		discussion.WithLogger(logger),
 	)
 	if err != nil {

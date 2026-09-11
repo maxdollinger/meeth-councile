@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/maxdollinger/meeth-councile/internal/llm"
 	"github.com/maxdollinger/meeth-councile/internal/memory"
@@ -81,6 +82,18 @@ func (f *fakeSpeaker) HearDirect(_ context.Context, name, content string) (memor
 	return memory.Understanding{Speaker: name, Content: content}, nil
 }
 
+func (f *fakeSpeaker) HasHeard(_ context.Context, name, content string) (bool, error) {
+	if f.hearErr != nil {
+		return false, f.hearErr
+	}
+	for _, h := range f.hears {
+		if h.speaker == name && h.content == content {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 type fakeStore struct {
 	turns   []Turn
 	entries []SpeakEntry
@@ -110,6 +123,27 @@ func (f *fakeStore) AppendCall(_ context.Context, c Call) error {
 	}
 	f.calls = append(f.calls, c)
 	return nil
+}
+
+func (f *fakeStore) Entries(_ context.Context) ([]Turn, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.turns, nil
+}
+
+func (f *fakeStore) SpeakEntries(_ context.Context) ([]SpeakEntry, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.entries, nil
+}
+
+func (f *fakeStore) Calls(_ context.Context) ([]Call, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.calls, nil
 }
 
 func speaker(name string) *fakeSpeaker { return &fakeSpeaker{name: name} }
@@ -522,4 +556,127 @@ func groupRounds(turns []Turn) map[int][]Turn {
 		out[turn.Round] = append(out[turn.Round], turn)
 	}
 	return out
+}
+
+func TestRunResumesFromStoredTranscript(t *testing.T) {
+	a, b, c := speaker("a"), speaker("b"), speaker("c")
+	for _, s := range []*fakeSpeaker{a, b, c} {
+		s.respond = alwaysPass
+		// The opening was already delivered before the interruption.
+		s.hears = append(s.hears, hearCall{speaker: moderator, content: testTopic})
+	}
+	b.hears = append(b.hears, hearCall{speaker: "a", content: "alpha"})
+
+	st := &fakeStore{turns: []Turn{
+		{Round: 0, Order: 0, Speaker: moderator, Content: testTopic},
+		{Round: 1, Order: 1, Speaker: "a", Model: "m1", Content: "alpha"},
+	}}
+	d, err := New(testTopic, []Speaker{a, b, c}, []string{"m1", "m2"}, st,
+		WithRand(rand.New(rand.NewSource(5))), WithMaxRounds(5))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	res, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Ended != EndedAllPassed {
+		t.Errorf("Ended = %q, want %q", res.Ended, EndedAllPassed)
+	}
+	if res.Rounds != 2 {
+		t.Errorf("Rounds = %d, want 2", res.Rounds)
+	}
+
+	// Only c was still missing its understanding of "alpha"; b already had it.
+	if a.hearsContent("alpha") != 0 {
+		t.Errorf("speaker a heard its own turn")
+	}
+	if b.hearsContent("alpha") != 1 {
+		t.Errorf("speaker b heard alpha %d times, want 1", b.hearsContent("alpha"))
+	}
+	if c.hearsContent("alpha") != 1 {
+		t.Errorf("speaker c heard alpha %d times, want 1", c.hearsContent("alpha"))
+	}
+
+	// The opening is delivered once, not again on resume.
+	for _, s := range []*fakeSpeaker{a, b, c} {
+		if got := s.hearsContent(testTopic); got != 1 {
+			t.Errorf("%s heard the opening %d times, want 1", s.name, got)
+		}
+	}
+
+	// The resumed transcript has no duplicate (round, turn) pairs.
+	seen := make(map[string]bool)
+	for _, turn := range res.Turns {
+		key := strconv.Itoa(turn.Round) + ":" + strconv.Itoa(turn.Order)
+		if seen[key] {
+			t.Fatalf("duplicate turn %s", key)
+		}
+		seen[key] = true
+	}
+	if len(res.Turns) != 7 {
+		t.Fatalf("turns = %d, want 7 (1 opening + 2 rounds of 3)", len(res.Turns))
+	}
+}
+
+func TestRunResumeFinishedDiscussionDoesNotSpeak(t *testing.T) {
+	a, b := speaker("a"), speaker("b")
+	a.respond = alwaysContent
+	b.respond = alwaysContent
+	for _, s := range []*fakeSpeaker{a, b} {
+		s.hears = append(s.hears, hearCall{speaker: moderator, content: testTopic})
+	}
+	st := &fakeStore{turns: []Turn{
+		{Round: 0, Order: 0, Speaker: moderator, Content: testTopic},
+		{Round: 1, Order: 1, Speaker: "a", Model: "m1", Content: "PASS", Passed: true},
+		{Round: 1, Order: 2, Speaker: "b", Model: "m1", Content: "PASS", Passed: true},
+	}}
+	d, err := New(testTopic, []Speaker{a, b}, []string{"m1"}, st, WithRand(rand.New(rand.NewSource(1))))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	res, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Ended != EndedAllPassed || res.Rounds != 1 {
+		t.Errorf("Ended = %q, Rounds = %d; want %q, 1", res.Ended, res.Rounds, EndedAllPassed)
+	}
+	if a.speakN != 0 || b.speakN != 0 {
+		t.Errorf("speakers spoke again: a=%d b=%d", a.speakN, b.speakN)
+	}
+	if len(res.Turns) != 3 {
+		t.Errorf("turns = %d, want 3", len(res.Turns))
+	}
+}
+
+func TestRunRoundDelayAbortsOnCancel(t *testing.T) {
+	a, b := speaker("a"), speaker("b")
+	a.respond = alwaysContent
+	b.respond = alwaysContent
+	d := newDiscussion(t, []Speaker{a, b}, nil,
+		WithRand(rand.New(rand.NewSource(1))), WithMaxRounds(3), WithRoundDelay(time.Hour))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res, err := d.Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+	// Only the first round ran before the pause noticed the cancellation.
+	if got := groupRounds(res.Turns); len(got) != 1 {
+		t.Errorf("rounds recorded = %d, want 1", len(got))
+	}
+}
+
+func (f *fakeSpeaker) hearsContent(content string) int {
+	n := 0
+	for _, h := range f.hears {
+		if h.content == content {
+			n++
+		}
+	}
+	return n
 }

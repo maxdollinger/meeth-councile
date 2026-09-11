@@ -122,7 +122,9 @@ and cost, and research calls. Tune them with:
   per-step agent detail, comprehension calls, and HTTP request lines.
 - `LOG_FORMAT` — `text` (default, logfmt-style) or `json`.
 
-The web server binds `ADDR` (default `:8080`).
+The web server binds `ADDR` (default `:8080`). `ROUND_DELAY` sets how long to
+pause between rounds (default `30m`, a Go duration such as `10s` or `1h`); set
+it to `0` to run rounds back to back.
 
 ## Explicitly out of scope
 

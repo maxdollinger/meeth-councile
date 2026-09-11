@@ -41,11 +41,15 @@ type SpeakEntry = store.SpeakEntry
 type Call = store.Call
 
 // Store persists the shared transcript, every speak output, and the model-call
-// cost log.
+// cost log. The read methods let a restarted run resume from what is already
+// recorded instead of starting over.
 type Store interface {
 	Append(ctx context.Context, turn Turn) error
 	AppendSpeakEntry(ctx context.Context, entry SpeakEntry) error
 	AppendCall(ctx context.Context, call Call) error
+	Entries(ctx context.Context) ([]Turn, error)
+	SpeakEntries(ctx context.Context) ([]SpeakEntry, error)
+	Calls(ctx context.Context) ([]Call, error)
 }
 
 // Speaker is the slice of *persona.Persona the discussion depends on.
@@ -55,6 +59,9 @@ type Speaker interface {
 	Speak(ctx context.Context) (name, content string, usage llm.Usage, output llm.Input, err error)
 	Hear(ctx context.Context, name, content string) (memory.Understanding, llm.Usage, error)
 	HearDirect(ctx context.Context, name, content string) (memory.Understanding, error)
+	// HasHeard reports whether this speaker already holds an understanding of a
+	// heard turn, so a resumed run does not deliver it twice.
+	HasHeard(ctx context.Context, name, content string) (bool, error)
 }
 
 // EndReason says why a discussion stopped.
@@ -85,7 +92,9 @@ type Discussion struct {
 	store     Store
 	rng       *rand.Rand
 	maxRounds int
-	logger    *slog.Logger
+	// roundDelay stretches the discussion by pausing between rounds.
+	roundDelay time.Duration
+	logger     *slog.Logger
 	// current is each speaker's model in use, updated whenever UseModel is
 	// called, so a heard turn can be attributed to the listener's model.
 	current map[string]string
@@ -150,14 +159,28 @@ func New(topic string, speakers []Speaker, models []string, store Store, opts ..
 	return d, nil
 }
 
-// Run holds the discussion. It opens with every speaker hearing the topic, then
-// runs rounds until every speaker passes in one round or maxRounds is reached.
-// A speaker or store error aborts the run and returns the turns recorded so far.
+// Run holds the discussion. When the store already has a transcript it resumes
+// from there; otherwise it opens with every speaker hearing the topic. Rounds
+// continue until every speaker passes in one round or maxRounds is reached. A
+// speaker or store error aborts the run and returns the turns recorded so far.
 func (d *Discussion) Run(ctx context.Context) (Result, error) {
-	result := Result{}
-
 	logger := d.logger
-	logger.Info("discussion started", "topic", d.topic, "speakers", len(d.speakers), "max_rounds", d.maxRounds)
+	logger.Info("discussion started", "topic", d.topic, "speakers", len(d.speakers), "max_rounds", d.maxRounds, "round_delay", d.roundDelay)
+
+	existing, err := d.store.Entries(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(existing) == 0 {
+		return d.runFresh(ctx)
+	}
+	return d.runResume(ctx, existing)
+}
+
+// runFresh opens a new discussion and runs it from the first round.
+func (d *Discussion) runFresh(ctx context.Context) (Result, error) {
+	result := Result{}
+	logger := d.logger
 
 	if err := d.open(ctx, &result); err != nil {
 		return result, err
@@ -171,53 +194,15 @@ func (d *Discussion) Run(ctx context.Context) (Result, error) {
 
 		passes := 0
 		for i, sp := range order {
-			name := sp.Name()
-			start := time.Now()
-			if err := sp.UseModel(models[name]); err != nil {
-				return result, fmt.Errorf("discussion: set model for %s: %w", name, err)
-			}
-			d.current[name] = models[name]
-			speaker, content, usage, _, err := sp.Speak(ctx)
+			turn, err := d.speak(ctx, logger, &result, round, i+1, sp, models[sp.Name()])
 			if err != nil {
-				return result, fmt.Errorf("discussion: %s speaks: %w", name, err)
-			}
-			passed := agent.IsPass(content)
-			turn := Turn{
-				Round:   round,
-				Order:   i + 1,
-				Speaker: speaker,
-				Model:   models[name],
-				Content: content,
-				Passed:  passed,
-			}
-			if err := d.store.Append(ctx, turn); err != nil {
 				return result, err
 			}
-			result.Turns = append(result.Turns, turn)
-
-			entries := speakEntries(round, speaker, models[name], content, passed)
-			for _, entry := range entries {
-				if err := d.store.AppendSpeakEntry(ctx, entry); err != nil {
-					return result, err
-				}
-				result.Entries = append(result.Entries, entry)
-			}
-			if err := d.recordCall(ctx, &result, Call{
-				Round:   round,
-				Speaker: speaker,
-				Model:   models[name],
-				Purpose: store.CallSpeak,
-				Usage:   usage,
-			}); err != nil {
-				return result, err
-			}
-			logger.Info("turn", "round", round, "order", i+1, "speaker", speaker, "model", models[name], "passed", passed, "chars", len(content), "outputs", len(entries), "total_tokens", usage.TotalTokens, "cost", usage.Cost, "duration", time.Since(start))
-
-			if passed {
+			if turn.Passed {
 				passes++
 				continue
 			}
-			if err := d.hear(ctx, logger, round, &result, order, speaker, content); err != nil {
+			if err := d.hear(ctx, logger, round, &result, order, turn.Speaker, turn.Content); err != nil {
 				return result, err
 			}
 		}
@@ -229,11 +214,318 @@ func (d *Discussion) Run(ctx context.Context) (Result, error) {
 			logger.Info("discussion ended", "rounds", result.Rounds, "ended", result.Ended, "turns", len(result.Turns))
 			return result, nil
 		}
+		if round < d.maxRounds {
+			if err := d.pause(ctx); err != nil {
+				return result, err
+			}
+		}
 	}
 
 	result.Ended = EndedMaxRounds
 	logger.Info("discussion ended", "rounds", result.Rounds, "ended", result.Ended, "turns", len(result.Turns))
 	return result, nil
+}
+
+// runResume picks a stored discussion back up. It replays the parts that were
+// recorded but not completed (pending comprehension calls), finishes the round
+// that was interrupted, then runs further rounds up to the cap. Every persona's
+// own memory already holds what it heard and said, so nothing is re-spoken.
+func (d *Discussion) runResume(ctx context.Context, existing []Turn) (Result, error) {
+	result := Result{Turns: existing}
+	logger := d.logger
+
+	entries, err := d.store.SpeakEntries(ctx)
+	if err != nil {
+		return result, err
+	}
+	result.Entries = entries
+	calls, err := d.store.Calls(ctx)
+	if err != nil {
+		return result, err
+	}
+	result.Calls = calls
+	logger.Info("resuming discussion", "turns", len(existing), "entries", len(entries), "calls", len(calls))
+
+	// Give every speaker a model now so comprehension calls made while catching
+	// up can be attributed to a model.
+	for _, sp := range d.speakers {
+		model := d.pickModel()
+		if err := sp.UseModel(model); err != nil {
+			return result, fmt.Errorf("discussion: set model for %s: %w", sp.Name(), err)
+		}
+		d.current[sp.Name()] = model
+	}
+
+	// Re-deliver the opening only to a speaker that does not somehow have it.
+	if _, opened := moderatorTurn(existing); opened {
+		for _, sp := range d.speakers {
+			heard, err := sp.HasHeard(ctx, moderator, d.topic)
+			if err != nil {
+				return result, fmt.Errorf("discussion: check opening for %s: %w", sp.Name(), err)
+			}
+			if heard {
+				continue
+			}
+			if _, err := sp.HearDirect(ctx, moderator, d.topic); err != nil {
+				return result, fmt.Errorf("discussion: %s hears the opening: %w", sp.Name(), err)
+			}
+		}
+	}
+
+	// A recorded turn whose comprehension calls never finished is caught up here.
+	if err := d.deliverPendingHears(ctx, logger, &result, existing); err != nil {
+		return result, err
+	}
+
+	rounds := groupDebateRounds(existing)
+	lastRound := highestRound(rounds)
+
+	// The discussion may already be over.
+	if lastRound > 0 && len(rounds[lastRound]) == len(d.speakers) {
+		result.Rounds = lastRound
+		if allTurnPassed(rounds[lastRound]) {
+			result.Ended = EndedAllPassed
+			logger.Info("discussion ended", "rounds", result.Rounds, "ended", result.Ended, "turns", len(result.Turns))
+			return result, nil
+		}
+		if lastRound >= d.maxRounds {
+			result.Ended = EndedMaxRounds
+			logger.Info("discussion ended", "rounds", result.Rounds, "ended", result.Ended, "turns", len(result.Turns))
+			return result, nil
+		}
+	}
+
+	// Finish the interrupted round, if there is one.
+	if lastRound > 0 && len(rounds[lastRound]) < len(d.speakers) {
+		if err := d.finishRound(ctx, logger, &result, lastRound, rounds); err != nil {
+			return result, err
+		}
+		result.Rounds = lastRound
+		if allTurnPassed(rounds[lastRound]) {
+			result.Ended = EndedAllPassed
+			logger.Info("discussion ended", "rounds", result.Rounds, "ended", result.Ended, "turns", len(result.Turns))
+			return result, nil
+		}
+	}
+
+	// Continue with full rounds after the last one.
+	last := ""
+	if lastRound > 0 {
+		last = closer(rounds[lastRound])
+		if lastRound < d.maxRounds {
+			if err := d.pause(ctx); err != nil {
+				return result, err
+			}
+		}
+	}
+	for round := lastRound + 1; round <= d.maxRounds; round++ {
+		order := d.order(last)
+		models := d.assignModels()
+		logger.Info("round started", "round", round, "order", orderNames(order))
+
+		passes := 0
+		for i, sp := range order {
+			turn, err := d.speak(ctx, logger, &result, round, i+1, sp, models[sp.Name()])
+			if err != nil {
+				return result, err
+			}
+			if turn.Passed {
+				passes++
+				continue
+			}
+			if err := d.hear(ctx, logger, round, &result, order, turn.Speaker, turn.Content); err != nil {
+				return result, err
+			}
+		}
+
+		result.Rounds = round
+		last = order[len(order)-1].Name()
+		if passes == len(order) {
+			result.Ended = EndedAllPassed
+			logger.Info("discussion ended", "rounds", result.Rounds, "ended", result.Ended, "turns", len(result.Turns))
+			return result, nil
+		}
+		if round < d.maxRounds {
+			if err := d.pause(ctx); err != nil {
+				return result, err
+			}
+		}
+	}
+
+	result.Ended = EndedMaxRounds
+	logger.Info("discussion ended", "rounds", result.Rounds, "ended", result.Ended, "turns", len(result.Turns))
+	return result, nil
+}
+
+// speak runs one speaking turn: assign the model, get the answer, and record the
+// turn, its speak entry, and its model call.
+func (d *Discussion) speak(ctx context.Context, logger *slog.Logger, result *Result, round, order int, sp Speaker, model string) (Turn, error) {
+	name := sp.Name()
+	start := time.Now()
+	if err := sp.UseModel(model); err != nil {
+		return Turn{}, fmt.Errorf("discussion: set model for %s: %w", name, err)
+	}
+	d.current[name] = model
+	speaker, content, usage, _, err := sp.Speak(ctx)
+	if err != nil {
+		return Turn{}, fmt.Errorf("discussion: %s speaks: %w", name, err)
+	}
+	passed := agent.IsPass(content)
+	turn := Turn{
+		Round:   round,
+		Order:   order,
+		Speaker: speaker,
+		Model:   model,
+		Content: content,
+		Passed:  passed,
+	}
+	if err := d.store.Append(ctx, turn); err != nil {
+		return Turn{}, err
+	}
+	result.Turns = append(result.Turns, turn)
+
+	entries := speakEntries(round, speaker, model, content, passed)
+	for _, entry := range entries {
+		if err := d.store.AppendSpeakEntry(ctx, entry); err != nil {
+			return Turn{}, err
+		}
+		result.Entries = append(result.Entries, entry)
+	}
+	if err := d.recordCall(ctx, result, Call{
+		Round:   round,
+		Speaker: speaker,
+		Model:   model,
+		Purpose: store.CallSpeak,
+		Usage:   usage,
+	}); err != nil {
+		return Turn{}, err
+	}
+	logger.Info("turn", "round", round, "order", order, "speaker", speaker, "model", model, "passed", passed, "chars", len(content), "outputs", len(entries), "total_tokens", usage.TotalTokens, "cost", usage.Cost, "duration", time.Since(start))
+	return turn, nil
+}
+
+// finishRound has the speakers who have not yet spoken in round produce their
+// turns, then delivers each new turn to the others.
+func (d *Discussion) finishRound(ctx context.Context, logger *slog.Logger, result *Result, round int, rounds map[int][]Turn) error {
+	done := make(map[string]bool, len(d.speakers))
+	nextOrder := 0
+	for _, turn := range rounds[round] {
+		done[turn.Speaker] = true
+		if turn.Order > nextOrder {
+			nextOrder = turn.Order
+		}
+	}
+	for _, sp := range d.order("") {
+		if done[sp.Name()] {
+			continue
+		}
+		nextOrder++
+		turn, err := d.speak(ctx, logger, result, round, nextOrder, sp, d.pickModel())
+		if err != nil {
+			return err
+		}
+		rounds[round] = append(rounds[round], turn)
+		if turn.Passed {
+			continue
+		}
+		if err := d.hear(ctx, logger, round, result, d.speakers, turn.Speaker, turn.Content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deliverPendingHears catches up comprehension calls for recorded, non-passed
+// turns a listener has not yet heard.
+func (d *Discussion) deliverPendingHears(ctx context.Context, logger *slog.Logger, result *Result, turns []Turn) error {
+	for _, turn := range turns {
+		if turn.Round == 0 || turn.Passed || strings.TrimSpace(turn.Content) == "" {
+			continue
+		}
+		for _, other := range d.speakers {
+			if other.Name() == turn.Speaker {
+				continue
+			}
+			heard, err := other.HasHeard(ctx, turn.Speaker, turn.Content)
+			if err != nil {
+				return fmt.Errorf("discussion: check %s heard %s: %w", other.Name(), turn.Speaker, err)
+			}
+			if heard {
+				continue
+			}
+			start := time.Now()
+			_, usage, err := other.Hear(ctx, turn.Speaker, turn.Content)
+			if err != nil {
+				return fmt.Errorf("discussion: %s hears %s: %w", other.Name(), turn.Speaker, err)
+			}
+			if err := d.recordCall(ctx, result, Call{
+				Round:   turn.Round,
+				Speaker: other.Name(),
+				Model:   d.current[other.Name()],
+				Purpose: store.CallUnderstand,
+				Usage:   usage,
+			}); err != nil {
+				return err
+			}
+			logger.Debug("hears", "speaker", turn.Speaker, "listener", other.Name(), "chars", len(turn.Content), "total_tokens", usage.TotalTokens, "cost", usage.Cost, "duration", time.Since(start))
+		}
+	}
+	return nil
+}
+
+// groupDebateRounds buckets the debate turns (round >= 1) by round.
+func groupDebateRounds(turns []Turn) map[int][]Turn {
+	out := make(map[int][]Turn)
+	for _, turn := range turns {
+		if turn.Round >= 1 {
+			out[turn.Round] = append(out[turn.Round], turn)
+		}
+	}
+	return out
+}
+
+// highestRound returns the greatest round present, or 0 when there is none.
+func highestRound(rounds map[int][]Turn) int {
+	highest := 0
+	for round := range rounds {
+		if round > highest {
+			highest = round
+		}
+	}
+	return highest
+}
+
+// allTurnPassed reports whether a full round of turns were all passes.
+func allTurnPassed(turns []Turn) bool {
+	for _, turn := range turns {
+		if !turn.Passed {
+			return false
+		}
+	}
+	return len(turns) > 0
+}
+
+// closer returns the speaker of the last turn in the round.
+func closer(turns []Turn) string {
+	last := ""
+	highest := -1
+	for _, turn := range turns {
+		if turn.Order > highest {
+			highest = turn.Order
+			last = turn.Speaker
+		}
+	}
+	return last
+}
+
+// moderatorTurn returns the recorded moderator opening, if any.
+func moderatorTurn(turns []Turn) (Turn, bool) {
+	for _, turn := range turns {
+		if turn.Round == 0 && turn.Speaker == moderator {
+			return turn, true
+		}
+	}
+	return Turn{}, false
 }
 
 // orderNames returns the speaker names in speaking order, for logging.
@@ -329,6 +621,23 @@ func (d *Discussion) recordCall(ctx context.Context, result *Result, call Call) 
 	}
 	result.Calls = append(result.Calls, call)
 	return nil
+}
+
+// pause stretches the discussion by waiting between rounds. It returns early if
+// the context is cancelled, so shutdown is not held up by a pending delay.
+func (d *Discussion) pause(ctx context.Context) error {
+	if d.roundDelay <= 0 {
+		return nil
+	}
+	d.logger.Info("round pause", "delay", d.roundDelay)
+	timer := time.NewTimer(d.roundDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // order shuffles the roster. The previous round's closer cannot open the new

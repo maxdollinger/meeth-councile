@@ -183,6 +183,22 @@ func (p *Persona) HearDirect(ctx context.Context, name, content string) (memory.
 	return u, nil
 }
 
+// HasHeard reports whether the persona already holds an understanding of the
+// turn speaker/content. A resumed discussion uses it to avoid delivering the
+// same turn twice.
+func (p *Persona) HasHeard(ctx context.Context, speaker, content string) (bool, error) {
+	entries, err := p.memory.Entries(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, e := range entries {
+		if e.Kind == memory.KindUnderstanding && e.Speaker == speaker && e.Source == content {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Speak produces the persona's next turn. It reasons from its full memory
 // through the research-capable loop, persists the answer (with the loop, so
 // future turns resume its reasoning), and returns the persona's name, the
