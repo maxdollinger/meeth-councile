@@ -13,10 +13,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/maxdollinger/meeth-councile/internal/agent"
 	"github.com/maxdollinger/meeth-councile/internal/llm"
+	"github.com/maxdollinger/meeth-councile/internal/logging"
 	"github.com/maxdollinger/meeth-councile/internal/memory"
 )
 
@@ -55,6 +58,7 @@ type Persona struct {
 	maxSteps   int
 	opts       []llm.ResponseOption
 	loop       *agent.Agent
+	logger     *slog.Logger
 }
 
 // New builds a Persona over mem. client and model drive both the comprehension
@@ -81,6 +85,7 @@ func New(mem *memory.Memory, client CompletionClient, model string, researcher R
 		model:      model,
 		researcher: researcher,
 		maxSteps:   defaultMaxSteps,
+		logger:     logging.Discard(),
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -110,10 +115,11 @@ func (p *Persona) buildLoop() {
 }
 
 func (p *Persona) loopOptions() []agent.Option {
-	loopOpts := make([]agent.Option, 0, len(p.opts)+2)
+	loopOpts := make([]agent.Option, 0, len(p.opts)+3)
 	loopOpts = append(loopOpts,
 		agent.WithTools(p.researchTool()),
 		agent.WithMaxSteps(p.maxSteps),
+		agent.WithLogger(p.logger),
 	)
 	if len(p.opts) > 0 {
 		loopOpts = append(loopOpts, agent.WithResponseOptions(p.opts...))
@@ -128,13 +134,17 @@ func (p *Persona) loopOptions() []agent.Option {
 // Source keeps the raw words for audit, and Items keeps the loop so future
 // turns replay how the persona arrived at it.
 func (p *Persona) Hear(ctx context.Context, name, content string) (memory.Understanding, error) {
+	start := time.Now()
+	p.logger.Info("hear started", "persona", p.name, "speaker", name, "heard_chars", len(content))
 	summary, err := p.understand(ctx, name, content)
 	if err != nil {
+		p.logger.Info("hear failed", "persona", p.name, "speaker", name, "duration", time.Since(start), "err", err)
 		return memory.Understanding{}, err
 	}
 
 	history, err := p.memory.History(ctx)
 	if err != nil {
+		p.logger.Info("hear failed", "persona", p.name, "speaker", name, "duration", time.Since(start), "err", err)
 		return memory.Understanding{}, err
 	}
 	input := make(llm.Input, 0, len(history)+2)
@@ -143,6 +153,7 @@ func (p *Persona) Hear(ctx context.Context, name, content string) (memory.Unders
 
 	res, err := p.loop.Run(ctx, input)
 	if err != nil {
+		p.logger.Info("hear failed", "persona", p.name, "speaker", name, "duration", time.Since(start), "err", err)
 		return memory.Understanding{}, err
 	}
 
@@ -153,8 +164,10 @@ func (p *Persona) Hear(ctx context.Context, name, content string) (memory.Unders
 		Items:   newItems(input, res.History),
 	}
 	if err := p.memory.AppendUnderstanding(ctx, u); err != nil {
+		p.logger.Info("hear failed", "persona", p.name, "speaker", name, "duration", time.Since(start), "err", err)
 		return memory.Understanding{}, err
 	}
+	p.logger.Info("hear finished", "persona", p.name, "speaker", name, "heard_chars", len(content), "understanding_chars", len(u.Content), "duration", time.Since(start))
 	return u, nil
 }
 
@@ -162,10 +175,13 @@ func (p *Persona) Hear(ctx context.Context, name, content string) (memory.Unders
 // through the research-capable loop, persists the answer (with the loop, so
 // future turns resume its reasoning), and returns the persona's name and the
 // answer text.
-func (p *Persona) Speak(ctx context.Context) (string, string, error) {
+func (p *Persona) Speak(ctx context.Context) (string, string, llm.Input, error) {
+	start := time.Now()
+	p.logger.Info("speak started", "persona", p.name, "model", p.model)
 	history, err := p.memory.History(ctx)
 	if err != nil {
-		return "", "", err
+		p.logger.Info("speak failed", "persona", p.name, "model", p.model, "duration", time.Since(start), "err", err)
+		return "", "", nil, err
 	}
 	input := make(llm.Input, 0, len(history)+1)
 	input = append(input, history...)
@@ -173,18 +189,22 @@ func (p *Persona) Speak(ctx context.Context) (string, string, error) {
 
 	res, err := p.loop.Run(ctx, input)
 	if err != nil {
-		return "", "", err
+		p.logger.Info("speak failed", "persona", p.name, "model", p.model, "duration", time.Since(start), "err", err)
+		return "", "", nil, err
 	}
 
 	content := strings.TrimSpace(res.Text)
+	output := newItems(input, res.History)
 	if err := p.memory.AppendAnswer(ctx, memory.Answer{
 		Name:    p.name,
 		Content: content,
-		Items:   newItems(input, res.History),
+		Items:   output,
 	}); err != nil {
-		return "", "", err
+		p.logger.Info("speak failed", "persona", p.name, "model", p.model, "duration", time.Since(start), "err", err)
+		return "", "", nil, err
 	}
-	return p.name, content, nil
+	p.logger.Info("speak finished", "persona", p.name, "model", p.model, "chars", len(content), "passed", res.Passed, "steps", res.Steps, "duration", time.Since(start))
+	return p.name, content, output, nil
 }
 
 // understand runs the persona's single comprehension completion: one model call
@@ -200,6 +220,7 @@ func (p *Persona) understand(ctx context.Context, name, content string) (string,
 	if err != nil {
 		return "", err
 	}
+	p.logger.Debug("persona comprehension", "speaker", name, "model", p.model, "chars", len(res.Text))
 	return strings.TrimSpace(res.Text), nil
 }
 

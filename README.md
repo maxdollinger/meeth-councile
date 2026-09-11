@@ -90,8 +90,23 @@ Two separate SQLite records are kept:
 - **Per-persona memory** — each persona's own answers plus its personalized
   understandings of everything it heard. This is what that persona reasons
   from, and only that persona reads it.
+- **Discussion log** — every output a speaking turn produced, in order:
+  reasoning, tool calls, tool outputs, and the final message. The web
+  transcript renders these entries by time, rather than only the completed
+  turns.
 - **Research log** — every research-assistant call: query, caller, and raw
   output, kept for review/debugging but never fed back into any model.
+
+Alongside the SQLite records, the process emits structured logs (via
+`log/slog`) to stderr so a running server can be watched live: store and
+server startup, discussion/round/turn progress, every model call with tokens
+and cost, and research calls. Tune them with:
+
+- `LOG_LEVEL` — `debug`, `info` (default), `warn`, or `error`. `debug` adds
+  per-step agent detail, comprehension calls, and HTTP request lines.
+- `LOG_FORMAT` — `text` (default, logfmt-style) or `json`.
+
+The web server binds `ADDR` (default `:8080`).
 
 ## Explicitly out of scope
 

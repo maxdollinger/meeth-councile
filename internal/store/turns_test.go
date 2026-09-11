@@ -56,3 +56,44 @@ func TestTurnsAppendRequiresDiscussionID(t *testing.T) {
 		t.Fatal("blank discussion id: want error, got nil")
 	}
 }
+
+func TestSpeakEntriesInInsertionOrder(t *testing.T) {
+	ctx := context.Background()
+	repo := openTurnsRepo(t)
+
+	want := []SpeakEntry{
+		{Round: 0, Speaker: "moderator", Kind: "opening", Content: "topic"},
+		{Round: 1, Speaker: "realism", Model: "m1", Kind: "reasoning", Content: "why"},
+		{Round: 1, Speaker: "realism", Model: "m1", Kind: "tool_call", Content: "research {}"},
+		{Round: 1, Speaker: "realism", Model: "m1", Kind: "message", Content: "my answer"},
+	}
+	for _, e := range want {
+		if err := repo.AppendSpeakEntry(ctx, "d1", e); err != nil {
+			t.Fatalf("AppendSpeakEntry: %v", err)
+		}
+	}
+
+	got, err := repo.SpeakEntries(ctx, "d1")
+	if err != nil {
+		t.Fatalf("SpeakEntries: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("entries = %d, want %d", len(got), len(want))
+	}
+	for i, w := range want {
+		if got[i].Round != w.Round || got[i].Speaker != w.Speaker ||
+			got[i].Model != w.Model || got[i].Kind != w.Kind || got[i].Content != w.Content {
+			t.Errorf("entry[%d] = %+v, want %+v", i, got[i], w)
+		}
+		if got[i].CreatedAt.IsZero() {
+			t.Errorf("entry[%d] has zero CreatedAt", i)
+		}
+	}
+
+	if other, _ := repo.SpeakEntries(ctx, "d2"); len(other) != 0 {
+		t.Errorf("other discussion sees %d entries, want 0", len(other))
+	}
+	if err := repo.AppendSpeakEntry(ctx, "  ", SpeakEntry{Kind: "message"}); err == nil {
+		t.Fatal("blank discussion id: want error, got nil")
+	}
+}

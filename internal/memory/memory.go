@@ -10,9 +10,11 @@ package memory
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 
 	"github.com/maxdollinger/meeth-councile/internal/llm"
+	"github.com/maxdollinger/meeth-councile/internal/logging"
 	"github.com/maxdollinger/meeth-councile/internal/prompts"
 	"github.com/maxdollinger/meeth-councile/internal/store"
 )
@@ -25,12 +27,13 @@ type Memory struct {
 	persona       string
 	commonPrompt  string
 	personaPrompt string
+	logger        *slog.Logger
 }
 
 // New loads the persona's memory for discussionID, creating it on first use. The
 // prompts are snapshotted by the store at creation, so later edits to the prompt
 // files do not rewrite an existing memory.
-func New(ctx context.Context, repo *store.Memory, discussionID, persona string) (*Memory, error) {
+func New(ctx context.Context, repo *store.Memory, discussionID, persona string, opts ...Option) (*Memory, error) {
 	if repo == nil {
 		return nil, errors.New("memory: store is required")
 	}
@@ -51,14 +54,19 @@ func New(ctx context.Context, repo *store.Memory, discussionID, persona string) 
 	if err != nil {
 		return nil, err
 	}
-	return &Memory{
+	m := &Memory{
 		repo:          repo,
 		id:            s.ID,
 		discussionID:  s.DiscussionID,
 		persona:       s.Persona,
 		commonPrompt:  s.CommonPrompt,
 		personaPrompt: s.PersonaPrompt,
-	}, nil
+		logger:        logging.Discard(),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m, nil
 }
 
 // Persona returns the persona this memory belongs to.
@@ -81,12 +89,16 @@ func (m *Memory) AppendAnswer(ctx context.Context, a Answer) error {
 	} else if content == "" {
 		content = messageText(items)
 	}
-	return m.repo.Append(ctx, m.id, store.Entry{
+	if err := m.repo.Append(ctx, m.id, store.Entry{
 		Kind:    KindAnswer,
 		Speaker: m.persona,
 		Content: content,
 		Items:   items,
-	})
+	}); err != nil {
+		return err
+	}
+	m.logger.Debug("memory append", "persona", m.persona, "kind", KindAnswer, "chars", len(content))
+	return nil
 }
 
 // AppendUnderstanding stores the persona's personalized interpretation of
@@ -102,13 +114,17 @@ func (m *Memory) AppendUnderstanding(ctx context.Context, u Understanding) error
 	items := make(llm.Input, 0, len(u.Items)+1)
 	items = append(items, llm.User(label(u.Speaker, content)))
 	items = append(items, u.Items...)
-	return m.repo.Append(ctx, m.id, store.Entry{
+	if err := m.repo.Append(ctx, m.id, store.Entry{
 		Kind:    KindUnderstanding,
 		Speaker: u.Speaker,
 		Content: content,
 		Items:   items,
 		Source:  u.Source,
-	})
+	}); err != nil {
+		return err
+	}
+	m.logger.Debug("memory append", "persona", m.persona, "kind", KindUnderstanding, "speaker", u.Speaker, "chars", len(content))
+	return nil
 }
 
 // Entries returns the persona's memory in the order it was recorded.

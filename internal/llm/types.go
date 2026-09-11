@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -82,8 +83,8 @@ type outputItem struct {
 	CallID           string        `json:"call_id"`
 	Name             string        `json:"name"`
 	Arguments        string        `json:"arguments"`
-	Content          []contentPart `json:"content"`
-	Summary          []summaryPart `json:"summary"`
+	Content          contentParts  `json:"content"`
+	Summary          summaryParts  `json:"summary"`
 	EncryptedContent string        `json:"encrypted_content"`
 	Format           string        `json:"format"`
 	Signature        string        `json:"signature"`
@@ -95,9 +96,63 @@ type contentPart struct {
 	Text string `json:"text"`
 }
 
+// contentParts accepts both the standard array of content parts and a bare
+// string, which some providers (e.g. DeepSeek) emit for reasoning and message
+// content. A bare string is represented as a single part with no type so that
+// result() can treat it as text regardless of the enclosing item type.
+type contentParts []contentPart
+
+func (c *contentParts) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		*c = nil
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return err
+		}
+		*c = contentParts{{Text: s}}
+		return nil
+	}
+	var parts []contentPart
+	if err := json.Unmarshal(trimmed, &parts); err != nil {
+		return err
+	}
+	*c = contentParts(parts)
+	return nil
+}
+
 type summaryPart struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+// summaryParts mirrors contentParts for reasoning summaries, which some
+// providers likewise emit as a bare string.
+type summaryParts []summaryPart
+
+func (s *summaryParts) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		*s = nil
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var str string
+		if err := json.Unmarshal(trimmed, &str); err != nil {
+			return err
+		}
+		*s = summaryParts{{Text: str}}
+		return nil
+	}
+	var parts []summaryPart
+	if err := json.Unmarshal(trimmed, &parts); err != nil {
+		return err
+	}
+	*s = summaryParts(parts)
+	return nil
 }
 
 type apiError struct {

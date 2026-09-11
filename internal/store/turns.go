@@ -54,6 +54,71 @@ func (t *Turns) Append(ctx context.Context, discussionID string, turn Turn) erro
 	return nil
 }
 
+// SpeakEntry is one output item produced during a speak turn. Kind is the item
+// type ("opening", "reasoning", "tool_call", "tool_output", "message", "pass");
+// Content is its rendered text. Round is 0 for the moderator opening.
+type SpeakEntry struct {
+	ID        int64
+	Round     int
+	Speaker   string
+	Model     string
+	Kind      string
+	Content   string
+	CreatedAt time.Time
+}
+
+// AppendSpeakEntry records one speak output in discussionID.
+func (t *Turns) AppendSpeakEntry(ctx context.Context, discussionID string, e SpeakEntry) error {
+	discussionID = strings.TrimSpace(discussionID)
+	if discussionID == "" {
+		return fmt.Errorf("store: discussion id is required")
+	}
+	createdAt := e.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	_, err := t.db.ExecContext(ctx, `
+		INSERT INTO speak_entries (discussion_id, round, speaker, model, kind, content, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		discussionID, e.Round, e.Speaker, e.Model, e.Kind, e.Content, createdAt.Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("store: append speak entry: %w", err)
+	}
+	return nil
+}
+
+// SpeakEntries returns discussionID's speak outputs ordered by time, then by
+// insertion order for outputs recorded within the same second.
+func (t *Turns) SpeakEntries(ctx context.Context, discussionID string) ([]SpeakEntry, error) {
+	rows, err := t.db.QueryContext(ctx, `
+		SELECT id, round, speaker, model, kind, content, created_at
+		FROM speak_entries WHERE discussion_id = ? ORDER BY created_at, id`, discussionID)
+	if err != nil {
+		return nil, fmt.Errorf("store: list speak entries: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SpeakEntry
+	for rows.Next() {
+		var (
+			e         SpeakEntry
+			createdAt int64
+		)
+		if err := rows.Scan(
+			&e.ID, &e.Round, &e.Speaker, &e.Model, &e.Kind, &e.Content, &createdAt,
+		); err != nil {
+			return nil, fmt.Errorf("store: scan speak entry: %w", err)
+		}
+		e.CreatedAt = time.Unix(createdAt, 0)
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: read speak entries: %w", err)
+	}
+	return out, nil
+}
+
 // Entries returns discussionID's turns in speaking order.
 func (t *Turns) Entries(ctx context.Context, discussionID string) ([]Turn, error) {
 	rows, err := t.db.QueryContext(ctx, `

@@ -43,6 +43,22 @@ CREATE TABLE IF NOT EXISTS turns (
 
 CREATE INDEX IF NOT EXISTS idx_turns_discussion_round ON turns (discussion_id, round, turn);
 
+-- Every output item a speak turn produced (reasoning, tool calls, tool
+-- outputs, messages), in the order it was produced. The web transcript renders
+-- these ordered by time rather than only the completed turns.
+CREATE TABLE IF NOT EXISTS speak_entries (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    discussion_id TEXT NOT NULL,
+    round         INTEGER NOT NULL,
+    speaker       TEXT NOT NULL,
+    model         TEXT NOT NULL DEFAULT '',
+    kind          TEXT NOT NULL,
+    content       TEXT NOT NULL,
+    created_at    INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_speak_entries_discussion ON speak_entries (discussion_id, created_at, id);
+
 -- Research assistant audit log: every tool call, its caller, and its output.
 CREATE TABLE IF NOT EXISTS research_log (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,

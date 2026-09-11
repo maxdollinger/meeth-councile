@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/maxdollinger/meeth-councile/internal/llm"
 	"github.com/maxdollinger/meeth-councile/internal/memory"
 )
 
@@ -26,6 +27,7 @@ type fakeSpeaker struct {
 	hears        []hearCall
 	speakN       int
 	respond      func(n int) (string, error)
+	output       llm.Input
 	speakErr     error
 	hearErr      error
 }
@@ -41,21 +43,25 @@ func (f *fakeSpeaker) UseModel(model string) error {
 	return nil
 }
 
-func (f *fakeSpeaker) Speak(context.Context) (string, string, error) {
+func (f *fakeSpeaker) Speak(context.Context) (string, string, llm.Input, error) {
 	f.speakN++
 	if f.speakErr != nil {
-		return "", "", f.speakErr
+		return "", "", nil, f.speakErr
 	}
 	f.spokenModels = append(f.spokenModels, f.lastModel)
 	content := "turn " + strconv.Itoa(f.speakN)
 	if f.respond != nil {
 		c, err := f.respond(f.speakN)
 		if err != nil {
-			return "", "", err
+			return "", "", nil, err
 		}
 		content = c
 	}
-	return f.name, content, nil
+	output := f.output
+	if output == nil {
+		output = llm.Input{llm.Assistant(content)}
+	}
+	return f.name, content, output, nil
 }
 
 func (f *fakeSpeaker) Hear(_ context.Context, name, content string) (memory.Understanding, error) {
@@ -67,8 +73,9 @@ func (f *fakeSpeaker) Hear(_ context.Context, name, content string) (memory.Unde
 }
 
 type fakeStore struct {
-	turns []Turn
-	err   error
+	turns   []Turn
+	entries []SpeakEntry
+	err     error
 }
 
 func (f *fakeStore) Append(_ context.Context, _ string, t Turn) error {
@@ -76,6 +83,14 @@ func (f *fakeStore) Append(_ context.Context, _ string, t Turn) error {
 		return f.err
 	}
 	f.turns = append(f.turns, t)
+	return nil
+}
+
+func (f *fakeStore) AppendSpeakEntry(_ context.Context, _ string, e SpeakEntry) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.entries = append(f.entries, e)
 	return nil
 }
 
@@ -378,6 +393,61 @@ func TestRunHearErrorAborts(t *testing.T) {
 
 	if _, err := d.Run(context.Background(), "d1"); err == nil {
 		t.Fatal("want error, got nil")
+	}
+}
+
+func TestRunRecordsEverySpeakOutput(t *testing.T) {
+	a := speaker("a")
+	a.output = llm.Input{
+		llm.Reasoning{Summary: []llm.ReasoningSummary{{Text: "think"}}},
+		llm.FunctionCall{CallID: "c1", Name: "research", Arguments: `{"query":"x"}`},
+		llm.FunctionCallOutput{CallID: "c1", Output: "result"},
+		llm.Assistant("answer"),
+	}
+	store := &fakeStore{}
+	d, err := New(testTopic, []Speaker{a}, []string{"m1"}, store, WithMaxRounds(1))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	res, err := d.Run(context.Background(), "d1")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	wantKinds := []string{"opening", "reasoning", "tool_call", "tool_output", "message"}
+	if len(res.Entries) != len(wantKinds) {
+		t.Fatalf("entries = %d, want %d", len(res.Entries), len(wantKinds))
+	}
+	for i, kind := range wantKinds {
+		if res.Entries[i].Kind != kind {
+			t.Errorf("entry[%d].Kind = %q, want %q", i, res.Entries[i].Kind, kind)
+		}
+	}
+	if len(store.entries) != len(wantKinds) {
+		t.Errorf("stored entries = %d, want %d", len(store.entries), len(wantKinds))
+	}
+	if got := res.Entries[3].Content; got != "result" {
+		t.Errorf("tool output = %q, want result", got)
+	}
+}
+
+func TestRunMarksPassEntry(t *testing.T) {
+	a := speaker("a")
+	a.respond = alwaysPass
+	store := &fakeStore{}
+	d, err := New(testTopic, []Speaker{a}, []string{"m1"}, store)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	res, err := d.Run(context.Background(), "d1")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Entries) != 2 {
+		t.Fatalf("entries = %d, want opening + pass", len(res.Entries))
+	}
+	if res.Entries[1].Kind != kindPass {
+		t.Errorf("pass entry kind = %q, want %q", res.Entries[1].Kind, kindPass)
 	}
 }
 

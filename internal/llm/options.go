@@ -1,6 +1,21 @@
 package llm
 
-import "context"
+import (
+	"context"
+	"log/slog"
+)
+
+// Option configures a Client.
+type Option func(*Client)
+
+// WithLogger sets the logger used to record requests. A nil logger is ignored.
+func WithLogger(logger *slog.Logger) Option {
+	return func(c *Client) {
+		if logger != nil {
+			c.logger = logger
+		}
+	}
+}
 
 // ResponseOption adjusts a single /responses request.
 type ResponseOption func(*request)

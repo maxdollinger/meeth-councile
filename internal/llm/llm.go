@@ -7,8 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/maxdollinger/meeth-councile/internal/logging"
 )
 
 const (
@@ -22,23 +26,30 @@ type Client struct {
 	apiKey  string
 	baseURL string
 	http    *http.Client
+	logger  *slog.Logger
 }
 
-func New(apiKey string, httpClient *http.Client) *Client {
+func New(apiKey string, httpClient *http.Client, opts ...Option) *Client {
 	if apiKey == "" {
 		panic("llm: api key is required")
 	}
 	if httpClient == nil {
 		panic("llm: http client is required")
 	}
-	return &Client{
+	c := &Client{
 		apiKey:  apiKey,
 		baseURL: baseURL,
 		http:    httpClient,
+		logger:  logging.Discard(),
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 func (c *Client) Response(model string, input Input, opts ...ResponseOption) (Result, error) {
+	start := time.Now()
 	wired := input.wire()
 	if len(wired) == 0 {
 		return Result{}, errors.New("llm: input is required")
@@ -50,14 +61,31 @@ func (c *Client) Response(model string, input Input, opts ...ResponseOption) (Re
 
 	raw, err := c.do(req.ctx, req)
 	if err != nil {
+		c.logger.Warn("llm request failed", "model", model, "duration", time.Since(start), "err", err)
 		return Result{}, err
 	}
 
 	var parsed rawResponse
 	if err := json.Unmarshal(raw, &parsed); err != nil {
+		c.logger.Warn("llm response decode failed", "model", model, "duration", time.Since(start), "err", err)
 		return Result{}, fmt.Errorf("llm: decode response: %w", err)
 	}
-	return parsed.result()
+	res, err := parsed.result()
+	if err != nil {
+		c.logger.Warn("llm response error", "model", model, "duration", time.Since(start), "err", err)
+		return Result{}, err
+	}
+	c.logger.Debug("llm response",
+		"model", res.Model,
+		"id", res.ID,
+		"duration", time.Since(start),
+		"input_tokens", res.Usage.InputTokens,
+		"output_tokens", res.Usage.OutputTokens,
+		"total_tokens", res.Usage.TotalTokens,
+		"cost", res.Usage.Cost,
+		"tool_calls", len(res.ToolCalls),
+	)
+	return res, nil
 }
 
 // do sends body to the /responses endpoint and returns the raw response body.
@@ -118,7 +146,7 @@ func (r rawResponse) result() (Result, error) {
 		case "message":
 			var message strings.Builder
 			for _, part := range item.Content {
-				if part.Type == "output_text" {
+				if part.Type == "output_text" || part.Type == "" {
 					message.WriteString(part.Text)
 					text.WriteString(part.Text)
 				}
@@ -155,12 +183,12 @@ func (r rawResponse) result() (Result, error) {
 				Signature:        item.Signature,
 			}
 			for _, part := range item.Summary {
-				if part.Type == "summary_text" {
+				if part.Type == "summary_text" || part.Type == "" {
 					reasoning.Summary = append(reasoning.Summary, ReasoningSummary{Text: part.Text})
 				}
 			}
 			for _, part := range item.Content {
-				if part.Type == "reasoning_text" {
+				if part.Type == "reasoning_text" || part.Type == "" {
 					reasoning.Content = append(reasoning.Content, ReasoningText{Text: part.Text})
 				}
 			}

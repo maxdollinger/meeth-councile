@@ -67,3 +67,74 @@ hr {
 }
 
 a { color: inherit; }
+
+.opening .content {
+  font-style: italic;
+  font-size: 1.05rem;
+}
+
+.entry { margin: 0 0 1.75rem; }
+
+.entry .meta {
+  margin: 0 0 0.25rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+}
+
+.entry .model {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+.entry time {
+  font-variant-numeric: tabular-nums;
+}
+
+.entry.reasoning,
+.entry.tool_call,
+.entry.tool_output {
+  margin-bottom: 1rem;
+  padding-left: 0.9rem;
+  border-left: 2px solid var(--rule);
+}
+
+.entry.reasoning .content,
+.entry.tool_call .content,
+.entry.tool_output .content {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.entry.message {
+  margin-bottom: 1.75rem;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+
+.entry.pass {
+  margin-bottom: 1rem;
+  padding: 0.6rem 1.1rem;
+  border: 1px dashed var(--rule);
+  border-radius: 8px;
+}
+
+.entry.pass .content {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.content {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.pass {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.back { margin-top: 2rem; }

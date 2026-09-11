@@ -7,9 +7,11 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/maxdollinger/meeth-councile/internal/llm"
+	"github.com/maxdollinger/meeth-councile/internal/logging"
 )
 
 const defaultMaxSteps = 8
@@ -29,6 +31,7 @@ type Agent struct {
 	defs     []llm.Tool
 	maxSteps int
 	opts     []llm.ResponseOption
+	logger   *slog.Logger
 }
 
 // New builds an Agent with the given system prompt. Registered tools are
@@ -40,6 +43,7 @@ func New(client CompletionClient, model, system string, opts ...Option) *Agent {
 		system:   system,
 		tools:    make(map[string]Tool),
 		maxSteps: defaultMaxSteps,
+		logger:   logging.Discard(),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -69,10 +73,19 @@ func (a *Agent) Run(ctx context.Context, input llm.Input) (Result, error) {
 		total.TotalTokens += res.Usage.TotalTokens
 		total.Cost += res.Usage.Cost
 
+		a.logger.Debug("agent step",
+			"model", a.model,
+			"step", step,
+			"tool_calls", len(res.ToolCalls),
+			"total_tokens", total.TotalTokens,
+			"cost", total.Cost,
+		)
+
 		items := res.Items()
 		history = append(history, items...)
 
 		if len(res.ToolCalls) == 0 {
+			a.logger.Debug("agent answer", "model", a.model, "steps", step, "chars", len(res.Text), "passed", IsPass(res.Text))
 			return Result{
 				Text:    res.Text,
 				Passed:  IsPass(res.Text),
@@ -84,6 +97,7 @@ func (a *Agent) Run(ctx context.Context, input llm.Input) (Result, error) {
 
 		conv = append(conv, items...)
 		for _, call := range res.ToolCalls {
+			a.logger.Debug("agent tool call", "model", a.model, "step", step, "tool", call.Name)
 			output := llm.FunctionCallOutput{
 				CallID: callID(call),
 				Output: a.execute(ctx, call),
@@ -92,6 +106,7 @@ func (a *Agent) Run(ctx context.Context, input llm.Input) (Result, error) {
 			history = append(history, output)
 		}
 	}
+	a.logger.Warn("agent exceeded max steps", "model", a.model, "max_steps", a.maxSteps)
 	return Result{Steps: a.maxSteps, Usage: total, History: history},
 		fmt.Errorf("agent: exceeded max steps (%d)", a.maxSteps)
 }

@@ -235,7 +235,7 @@ func TestSpeakStoresAnswerAndReturnsNameContent(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	name, content, err := p.Speak(context.Background())
+	name, content, _, err := p.Speak(context.Background())
 	if err != nil {
 		t.Fatalf("Speak: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestUseModelSwitchesSubsequentCalls(t *testing.T) {
 	if err := p.UseModel("m2"); err != nil {
 		t.Fatalf("UseModel: %v", err)
 	}
-	if _, _, err := p.Speak(context.Background()); err != nil {
+	if _, _, _, err := p.Speak(context.Background()); err != nil {
 		t.Fatalf("Speak: %v", err)
 	}
 	if got := fc.calls[len(fc.calls)-1].model; got != "m2" {
@@ -301,7 +301,7 @@ func TestSpeakReadsPriorMemoryWithoutDuplicatingIt(t *testing.T) {
 	if _, err := p.Hear(context.Background(), "error-theory", "no moral facts"); err != nil {
 		t.Fatalf("Hear: %v", err)
 	}
-	if _, _, err := p.Speak(context.Background()); err != nil {
+	if _, _, _, err := p.Speak(context.Background()); err != nil {
 		t.Fatalf("Speak: %v", err)
 	}
 

@@ -621,6 +621,38 @@ func TestResponseParsesReasoning(t *testing.T) {
 	}
 }
 
+func TestResponseParsesStringContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{
+			"id":"resp-1",
+			"model":"deepseek/deepseek-v4-flash-0731",
+			"output":[
+				{"type":"reasoning","id":"rs_1","summary":"weigh options","content":"first, consider"},
+				{"type":"message","content":"done"}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	result, err := newTestClient(t, srv).Response("deepseek/deepseek-v4-flash-0731", Input{User("hi")})
+	if err != nil {
+		t.Fatalf("Response returned error: %v", err)
+	}
+	if result.Text != "done" {
+		t.Errorf("Text = %q, want %q", result.Text, "done")
+	}
+	if len(result.Reasoning) != 1 {
+		t.Fatalf("len(Reasoning) = %d, want 1", len(result.Reasoning))
+	}
+	reasoning := result.Reasoning[0]
+	if len(reasoning.Content) != 1 || reasoning.Content[0].Text != "first, consider" {
+		t.Errorf("Reasoning.Content = %+v, want one reasoning_text", reasoning.Content)
+	}
+	if len(reasoning.Summary) != 1 || reasoning.Summary[0].Text != "weigh options" {
+		t.Errorf("Reasoning.Summary = %+v, want one summary_text", reasoning.Summary)
+	}
+}
+
 func TestResultItemsIncludesReasoning(t *testing.T) {
 	output := Input{
 		Reasoning{ID: "rs_1", Summary: []ReasoningSummary{{Text: "hmm"}}},
