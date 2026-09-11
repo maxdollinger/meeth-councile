@@ -3,7 +3,7 @@
 Five LLM agents, each arguing from a distinct metaethical position, hold a
 multi-round discussion on a given topic. No agent framework — this is plain
 orchestration logic around chat-completion calls, since the requirements
-(single API schema via LiteLLM, one tool, no streaming) don't need anything
+(single API schema via OpenRouter, one tool, no streaming) don't need anything
 heavier.
 
 ## Agents
