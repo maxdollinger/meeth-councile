@@ -42,6 +42,18 @@ func WithTools(tools ...Tool) ResponseOption {
 	}
 }
 
+// WithServerTools exposes one or more OpenRouter-run server tools to the
+// model. Unlike WithTools it does not force tool_choice: the server tools run
+// as part of the provider's normal response handling. Calling it with no tools
+// is a no-op.
+func WithServerTools(tools ...ServerTool) ResponseOption {
+	return func(r *request) {
+		for _, t := range tools {
+			r.Tools = append(r.Tools, toolWire{Type: t.Type, Parameters: t.Parameters})
+		}
+	}
+}
+
 // WithInclude adds response includes (for example
 // "reasoning.encrypted_content", required to receive and replay encrypted
 // reasoning). Calling it with no values is a no-op.

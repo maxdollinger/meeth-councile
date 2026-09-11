@@ -10,12 +10,24 @@ type Tool interface {
 	Parameters() map[string]any
 }
 
-// toolWire is the JSON shape of a function tool in a /responses request.
+// toolWire is the JSON shape of a tool in a /responses request. Function tools
+// populate Name/Description; server tools (see ServerTool) leave them empty and
+// are identified by Type alone.
 type toolWire struct {
 	Type        string         `json:"type"`
-	Name        string         `json:"name"`
+	Name        string         `json:"name,omitempty"`
 	Description string         `json:"description,omitempty"`
 	Parameters  map[string]any `json:"parameters,omitempty"`
+}
+
+// ServerTool is a tool executed by OpenRouter rather than the caller. Unlike a
+// function Tool it has no client-side executor: the wire type (for example
+// "openrouter:web_search" or "openrouter:web_fetch") is enough, and the server
+// runs the tool loop, returning the results in the model's final reply.
+// Parameters, when set, follow that tool's own schema.
+type ServerTool struct {
+	Type       string
+	Parameters map[string]any
 }
 
 func toolDefinition(t Tool) toolWire {

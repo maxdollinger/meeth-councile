@@ -16,7 +16,9 @@ Five fixed personas, one per dominant metaethical position:
 - **Constructivism** — moral facts arise from an idealized rational/social procedure
 - **Relativism** — moral truths hold relative to culture or individual
 
-Each agent is just a system prompt. No other differentiation.
+Each agent's system prompt is the shared prompt (`internal/prompts/common.md`)
+plus a short position-specific prompt (`internal/prompts/personas/*.md`). Each
+also has a private memory (see below); nothing else differentiates them.
 
 ## Model access
 
@@ -41,25 +43,27 @@ lighter task than holding a philosophical position.
 - **End condition.** If every agent passes in the same round, the discussion
   ends.
 
-## Context management
+## Memory
 
-Each agent's context per turn is built as:
+Each persona has a private, SQLite-backed memory (`internal/memory`). Only the
+persona reads and writes it; there is no shared transcript. It is pure
+persistence and prompt assembly — it never calls a model itself.
 
-```
-[system: persona + PASS instructions]
-[user: moderator's opening prompt]              <- always present, pinned
-[user: "Summary of earlier discussion: ..."]    <- once one exists
-[last 4 rounds, verbatim, relabeled so the speaking
- agent's own prior turns look like `assistant`
- and everyone else's look like `user`]
-```
+- **System prompt.** The common prompt and the persona's own prompt, assembled
+  into one system message. Both are snapshotted when the persona's memory is
+  first created, so later edits to the files don't rewrite history.
+- **Hear.** When a persona hears another turn, the raw text is first run through
+  a comprehension call that produces a personalized interpretation. Only that
+  interpretation is stored, never the raw words. The persona reasons from what
+  it made of what was said, not from what was actually said.
+- **Speak.** A speaking turn is stored whole: reasoning, tool calls, tool
+  outputs, and the final message. Future turns replay that sequence verbatim, so
+  a persona both sees its own past answers and resumes its own chain of thought.
+- **Moderator opening.** Just the first thing a persona hears, personalized like
+  anything else.
 
-**Rolling summary.** Once the discussion exceeds 4 rounds, a summarizer call
-runs after each round: it's given the current summary plus the **last 5**
-completed rounds (raw, unrelabeled, speaker-tagged text) and produces an
-updated summary. The 4-round overlap between what's re-summarized and what's
-still shown verbatim keeps the summary grounded in source text rather than
-compounding through repeated summary-of-summary passes.
+Because memory is per-persona, two agents can hold incompatible readings of the
+same exchange, which is the point.
 
 ## Tooling: research assistant
 
@@ -67,35 +71,41 @@ Debate agents don't call search/fetch tools directly. They have access to a
 single tool, `research_assistant(query)`, which is itself a small nested
 agent: it runs its own tool loop (websearch + fetch) internally, capped at a
 few turns, and returns only a synthesized answer to the calling agent. This
-keeps raw search traffic out of the debate transcript entirely — search
-results are private to whichever agent requested them, and only their
-conclusions (in their own words) ever reach the shared discussion. Queries
-sent to the research assistant are self-contained (no debate history passed
-in), keeping it a clean, independently testable component.
+keeps raw search traffic out of the debate entirely — search results are
+private to whichever agent requested them.
+
+A research result is not a special case in memory. It is heard content, so it
+goes through the same comprehension step as anything else: the persona stores
+only its own interpretation, and the raw answer never enters its context. The
+query, caller, and raw output are written to a separate research log table for
+audit, and are never fed back into any model.
+
+Queries sent to the research assistant are self-contained (no debate history
+passed in), keeping it a clean, independently testable component.
 
 ## Logging
 
-Two separate records are kept:
+Two separate SQLite records are kept:
 
-- **Model-facing transcript** — only real (non-PASS) contributions, used to
-  build future context. This is what the agents see.
-- **Full run log** — everything: every reply including PASS turns, and every
-  research assistant call, kept for review/debugging but never fed back into
-  any model.
+- **Per-persona memory** — each persona's own answers plus its personalized
+  understandings of everything it heard. This is what that persona reasons
+  from, and only that persona reads it.
+- **Research log** — every research-assistant call: query, caller, and raw
+  output, kept for review/debugging but never fed back into any model.
 
 ## Explicitly out of scope
 
-Streaming, an agent framework, memory/RAG beyond the transcript, multiple
-tools, a dynamic/LLM-driven moderator. None of it is needed for this shape
-of project.
+Streaming, an agent framework, RAG/embedding retrieval, tools beyond the
+research assistant, a dynamic/LLM-driven moderator. None of it is needed for
+this shape of project.
 
 ## Build order
 
-1. LiteLLM + tool clients — bare "send messages, get completion" plumbing.
-2. Single-turn function for one agent: tool loop resolved, PASS detected.
-3. Round loop: shuffle, no-repeat boundary check, PASS/end-condition logic
-   (no summarization yet — fine for short test runs).
-4. Context builder: moderator pin + last-4-rounds windowing.
-5. Research assistant as a nested agent, wired in as the debate agents' tool.
-6. Rolling summarizer, wired in once rounds exceed 4.
-7. Logging/output (write the full run to disk as it progresses).
+1. LiteLLM + tool clients — bare "send messages, get completion" plumbing. Done.
+2. Single-turn agent: tool loop resolved, PASS detected. Done.
+3. Per-persona memory: SQLite persistence, system-prompt assembly, stored
+   answers and personalized understandings. Done.
+4. Persona: `Speak`/`Hear`, wiring the comprehension call and the research tool.
+5. Round loop: shuffle, no-repeat boundary check, PASS/end-condition logic.
+6. Research assistant as a nested agent plus its audit log.
+7. Output/logging.

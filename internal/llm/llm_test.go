@@ -328,6 +328,50 @@ func TestResponseSendsTools(t *testing.T) {
 	}
 }
 
+func TestResponseSendsServerTools(t *testing.T) {
+	var gotRaw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotRaw)
+		io.WriteString(w, `{"id":"resp-1","model":"gpt-4","output":[]}`)
+	}))
+	defer srv.Close()
+
+	_, err := newTestClient(t, srv).Response("gpt-4", Input{User("hi")}, WithServerTools(
+		ServerTool{Type: "openrouter:web_search", Parameters: map[string]any{"max_results": 3}},
+		ServerTool{Type: "openrouter:web_fetch"},
+	))
+	if err != nil {
+		t.Fatalf("Response returned error: %v", err)
+	}
+
+	if _, ok := gotRaw["tool_choice"]; ok {
+		t.Errorf("tool_choice present, want omitted for server tools")
+	}
+	tools, ok := gotRaw["tools"].([]any)
+	if !ok || len(tools) != 2 {
+		t.Fatalf("raw tools = %v, want two entries", gotRaw["tools"])
+	}
+	first, _ := tools[0].(map[string]any)
+	if first["type"] != "openrouter:web_search" {
+		t.Errorf("tools[0].type = %v, want openrouter:web_search", first["type"])
+	}
+	if _, ok := first["name"]; ok {
+		t.Errorf("tools[0] has name = %v, want omitted for a server tool", first["name"])
+	}
+	params, _ := first["parameters"].(map[string]any)
+	if params["max_results"] != float64(3) {
+		t.Errorf("tools[0].parameters = %v, want max_results 3", first["parameters"])
+	}
+	second, _ := tools[1].(map[string]any)
+	if second["type"] != "openrouter:web_fetch" {
+		t.Errorf("tools[1].type = %v, want openrouter:web_fetch", second["type"])
+	}
+	if _, ok := second["parameters"]; ok {
+		t.Errorf("tools[1] has parameters = %v, want omitted", second["parameters"])
+	}
+}
+
 func TestResponseParsesFunctionCalls(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{
