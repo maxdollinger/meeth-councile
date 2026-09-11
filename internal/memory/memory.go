@@ -61,6 +61,11 @@ func New(ctx context.Context, repo *store.Memory, discussionID, persona string) 
 	}, nil
 }
 
+// Persona returns the persona this memory belongs to.
+func (m *Memory) Persona() string {
+	return m.persona
+}
+
 // AppendAnswer stores one of the persona's own turns. a.Items is the full loop
 // from the speaking agent (agent.Result.History); when empty, a single assistant
 // message is stored from a.Content.
@@ -80,16 +85,21 @@ func (m *Memory) AppendAnswer(ctx context.Context, a Answer) error {
 }
 
 // AppendUnderstanding stores the persona's personalized interpretation of
-// something it heard. u.Source is persisted for audit but never replayed.
+// something it heard. The entry always opens with the heard turn, labeled by
+// speaker; any loop Items (reasoning, research, final message) are replayed
+// after it. u.Source is persisted for audit but never replayed.
 func (m *Memory) AppendUnderstanding(ctx context.Context, u Understanding) error {
 	content := strings.TrimSpace(u.Content)
 	if content == "" {
 		return errors.New("memory: understanding has no content")
 	}
+	items := make(llm.Input, 0, len(u.Items)+1)
+	items = append(items, llm.User(label(u.Speaker, content)))
+	items = append(items, u.Items...)
 	return m.repo.Append(ctx, m.id, store.Entry{
 		Kind:    KindUnderstanding,
 		Speaker: u.Speaker,
-		Items:   llm.Input{llm.User(label(u.Speaker, content))},
+		Items:   items,
 		Source:  u.Source,
 	})
 }
