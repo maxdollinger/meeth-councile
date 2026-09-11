@@ -1,0 +1,69 @@
+:root {
+  --fg: #1a1a1a;
+  --muted: #666;
+  --bg: #fff;
+  --rule: #e5e5e5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e8e8e8;
+    --muted: #999;
+    --bg: #111;
+    --rule: #333;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0 auto;
+  padding: 4rem 1.5rem 6rem;
+  max-width: 42rem;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+header { margin-bottom: 3rem; }
+
+h1 {
+  font-size: 1.6rem;
+  line-height: 1.3;
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+}
+
+.tagline {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  letter-spacing: 0.02em;
+}
+
+h2 {
+  font-size: 1rem;
+  margin: 2.5rem 0 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+p { margin: 0 0 1rem; }
+
+ul { margin: 0 0 1rem; padding-left: 1.3rem; }
+
+li { margin-bottom: 0.45rem; }
+
+li b { font-weight: 600; }
+
+li span { color: var(--muted); }
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 3rem 0;
+}
+
+a { color: inherit; }
