@@ -85,7 +85,31 @@ func New(mem *memory.Memory, client CompletionClient, model string, researcher R
 	for _, opt := range opts {
 		opt(p)
 	}
+	p.buildLoop()
+	return p, nil
+}
 
+// Name returns the persona's name.
+func (p *Persona) Name() string { return p.name }
+
+// UseModel points the persona's comprehension call and tool loop at model for
+// subsequent calls. Memory is untouched, so switching the model mid-discussion
+// only changes which model speaks from the accumulated understanding.
+func (p *Persona) UseModel(model string) error {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return errors.New("persona: model is required")
+	}
+	p.model = model
+	p.buildLoop()
+	return nil
+}
+
+func (p *Persona) buildLoop() {
+	p.loop = agent.New(p.client, p.model, p.memory.SystemPrompt(), p.loopOptions()...)
+}
+
+func (p *Persona) loopOptions() []agent.Option {
 	loopOpts := make([]agent.Option, 0, len(p.opts)+2)
 	loopOpts = append(loopOpts,
 		agent.WithTools(p.researchTool()),
@@ -94,12 +118,8 @@ func New(mem *memory.Memory, client CompletionClient, model string, researcher R
 	if len(p.opts) > 0 {
 		loopOpts = append(loopOpts, agent.WithResponseOptions(p.opts...))
 	}
-	p.loop = agent.New(client, model, mem.SystemPrompt(), loopOpts...)
-	return p, nil
+	return loopOpts
 }
-
-// Name returns the persona's name.
-func (p *Persona) Name() string { return p.name }
 
 // Hear interprets something the persona heard. name is the speaker and content
 // is what they said. The raw content is first reduced to the persona's own

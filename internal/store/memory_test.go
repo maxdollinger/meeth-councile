@@ -78,7 +78,7 @@ func TestMemoryAppendAndEntriesRoundTrip(t *testing.T) {
 		llm.FunctionCallOutput{CallID: "call_1", Output: "out"},
 		llm.Assistant("done"),
 	}
-	if err := repo.Append(ctx, snap.ID, Entry{Kind: "answer", Speaker: "realism", Items: items, Source: "raw"}); err != nil {
+	if err := repo.Append(ctx, snap.ID, Entry{Kind: "answer", Speaker: "realism", Content: "my text", Items: items, Source: "raw"}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if err := repo.Append(ctx, snap.ID, Entry{Kind: "understanding", Speaker: "error-theory", Items: llm.Input{llm.User("hi")}}); err != nil {
@@ -95,8 +95,8 @@ func TestMemoryAppendAndEntriesRoundTrip(t *testing.T) {
 	if entries[0].Seq != 1 || entries[1].Seq != 2 {
 		t.Errorf("seq = %d, %d; want 1, 2", entries[0].Seq, entries[1].Seq)
 	}
-	if entries[0].Kind != "answer" || entries[0].Speaker != "realism" || entries[0].Source != "raw" {
-		t.Errorf("entry[0] = %+v, want answer/realism/raw", entries[0])
+	if entries[0].Kind != "answer" || entries[0].Speaker != "realism" || entries[0].Content != "my text" || entries[0].Source != "raw" {
+		t.Errorf("entry[0] = %+v, want answer/realism/my text/raw", entries[0])
 	}
 	if got, want := wireJSON(t, entries[0].Items), wireJSON(t, items); got != want {
 		t.Errorf("items = %s, want %s", got, want)

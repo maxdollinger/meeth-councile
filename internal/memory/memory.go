@@ -67,19 +67,24 @@ func (m *Memory) Persona() string {
 }
 
 // AppendAnswer stores one of the persona's own turns. a.Items is the full loop
-// from the speaking agent (agent.Result.History); when empty, a single assistant
-// message is stored from a.Content.
+// from the speaking agent (agent.Result.History) and is kept for audit; a.Content
+// is the answer text replayed into history. When a.Content is empty it is
+// derived from the loop's final message.
 func (m *Memory) AppendAnswer(ctx context.Context, a Answer) error {
+	content := strings.TrimSpace(a.Content)
 	items := a.Items
 	if len(items) == 0 {
-		if strings.TrimSpace(a.Content) == "" {
+		if content == "" {
 			return errors.New("memory: answer has no content")
 		}
-		items = llm.Input{llm.Assistant(a.Content)}
+		items = llm.Input{llm.Assistant(content)}
+	} else if content == "" {
+		content = messageText(items)
 	}
 	return m.repo.Append(ctx, m.id, store.Entry{
 		Kind:    KindAnswer,
 		Speaker: m.persona,
+		Content: content,
 		Items:   items,
 	})
 }
@@ -87,7 +92,8 @@ func (m *Memory) AppendAnswer(ctx context.Context, a Answer) error {
 // AppendUnderstanding stores the persona's personalized interpretation of
 // something it heard. The entry always opens with the heard turn, labeled by
 // speaker; any loop Items (reasoning, research, final message) are replayed
-// after it. u.Source is persisted for audit but never replayed.
+// after it in the audit copy. u.Source is persisted for audit but never
+// replayed. Only u.Content is replayed into history.
 func (m *Memory) AppendUnderstanding(ctx context.Context, u Understanding) error {
 	content := strings.TrimSpace(u.Content)
 	if content == "" {
@@ -99,6 +105,7 @@ func (m *Memory) AppendUnderstanding(ctx context.Context, u Understanding) error
 	return m.repo.Append(ctx, m.id, store.Entry{
 		Kind:    KindUnderstanding,
 		Speaker: u.Speaker,
+		Content: content,
 		Items:   items,
 		Source:  u.Source,
 	})
@@ -115,4 +122,22 @@ func label(speaker, content string) string {
 		return content
 	}
 	return speaker + ": " + content
+}
+
+// messageText returns the text of the last non-empty message in items, used to
+// recover an answer's text when a caller stored only the loop.
+func messageText(items llm.Input) string {
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i] == nil {
+			continue
+		}
+		wire := items[i].ResponseItem()
+		if wire["type"] != "message" {
+			continue
+		}
+		if s, ok := wire["content"].(string); ok && strings.TrimSpace(s) != "" {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
 }

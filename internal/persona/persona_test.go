@@ -260,6 +260,28 @@ func TestSpeakStoresAnswerAndReturnsNameContent(t *testing.T) {
 	}
 }
 
+func TestUseModelSwitchesSubsequentCalls(t *testing.T) {
+	fc := &fakeClient{respond: func(_ fakeCall, _ int) (llm.Result, error) {
+		return llm.Result{Text: "reply"}, nil
+	}}
+	p, err := New(newMemory(t, "realism"), fc, "m1", &fakeResearcher{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := p.UseModel("m2"); err != nil {
+		t.Fatalf("UseModel: %v", err)
+	}
+	if _, _, err := p.Speak(context.Background()); err != nil {
+		t.Fatalf("Speak: %v", err)
+	}
+	if got := fc.calls[len(fc.calls)-1].model; got != "m2" {
+		t.Errorf("model = %q, want m2", got)
+	}
+	if err := p.UseModel("  "); err == nil {
+		t.Error("UseModel blank: want error, got nil")
+	}
+}
+
 func TestSpeakReadsPriorMemoryWithoutDuplicatingIt(t *testing.T) {
 	fc := &fakeClient{respond: func(_ fakeCall, n int) (llm.Result, error) {
 		switch n {

@@ -37,11 +37,14 @@ type Snapshot struct {
 	PersonaPrompt string
 }
 
-// Entry is one stored unit of a persona's memory, ordered by Seq.
+// Entry is one stored unit of a persona's memory, ordered by Seq. Content is
+// the persona's own text (its answer or understanding summary); Items is the
+// full agent loop, kept for audit and never replayed into history.
 type Entry struct {
 	Seq       int
 	Kind      string
 	Speaker   string
+	Content   string
 	Items     llm.Input
 	Source    string
 	CreatedAt time.Time
@@ -106,9 +109,9 @@ func (m *Memory) Append(ctx context.Context, memoryID string, e Entry) error {
 		return fmt.Errorf("store: next seq: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO entries (memory_id, seq, kind, speaker, items, source, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		memoryID, seq, e.Kind, e.Speaker, raw, nullString(e.Source), time.Now().Unix(),
+		INSERT INTO entries (memory_id, seq, kind, speaker, content, items, source, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		memoryID, seq, e.Kind, e.Speaker, e.Content, raw, nullString(e.Source), time.Now().Unix(),
 	); err != nil {
 		return fmt.Errorf("store: append entry: %w", err)
 	}
@@ -121,7 +124,7 @@ func (m *Memory) Append(ctx context.Context, memoryID string, e Entry) error {
 // Entries returns memoryID's entries in the order they were recorded.
 func (m *Memory) Entries(ctx context.Context, memoryID string) ([]Entry, error) {
 	rows, err := m.db.QueryContext(ctx, `
-		SELECT seq, kind, speaker, items, COALESCE(source, ''), created_at
+		SELECT seq, kind, speaker, content, items, COALESCE(source, ''), created_at
 		FROM entries WHERE memory_id = ? ORDER BY seq`, memoryID)
 	if err != nil {
 		return nil, fmt.Errorf("store: list entries: %w", err)
@@ -135,7 +138,7 @@ func (m *Memory) Entries(ctx context.Context, memoryID string) ([]Entry, error) 
 			raw       string
 			createdAt int64
 		)
-		if err := rows.Scan(&e.Seq, &e.Kind, &e.Speaker, &raw, &e.Source, &createdAt); err != nil {
+		if err := rows.Scan(&e.Seq, &e.Kind, &e.Speaker, &e.Content, &raw, &e.Source, &createdAt); err != nil {
 			return nil, fmt.Errorf("store: scan entry: %w", err)
 		}
 		items, err := unmarshalItems(raw)

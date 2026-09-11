@@ -258,6 +258,49 @@ func TestHistoryOrdersEntriesWithoutSystemOrSource(t *testing.T) {
 	}
 }
 
+func TestHistoryReplaysTextOnlyFromStoredLoops(t *testing.T) {
+	ctx := context.Background()
+	m := newMemory(t, openRepo(t), "d1", "realism")
+
+	loop := llm.Input{
+		llm.Reasoning{ID: "rs_1", Summary: []llm.ReasoningSummary{{Text: "secret reasoning"}}},
+		llm.FunctionCall{CallID: "call_1", Name: "research_assistant", Arguments: `{"query":"secret query"}`},
+		llm.FunctionCallOutput{CallID: "call_1", Output: "secret output"},
+		llm.Assistant("answer text"),
+	}
+	if err := m.AppendAnswer(ctx, Answer{Name: "realism", Content: "answer text", Items: loop}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AppendUnderstanding(ctx, Understanding{
+		Speaker: "error-theory",
+		Content: "their point",
+		Source:  "raw secret source",
+		Items:   loop,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	history, err := m.History(ctx)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	want := llm.Input{
+		llm.Assistant("answer text"),
+		llm.User("error-theory: their point"),
+	}
+	if got, wantJSON := wireJSON(t, history), wireJSON(t, want); got != wantJSON {
+		t.Errorf("History = %s, want %s", got, wantJSON)
+	}
+	for _, item := range history {
+		if item.Type() != "message" {
+			t.Errorf("History item type = %q, want message only", item.Type())
+		}
+		if s, _ := item.ResponseItem()["content"].(string); strings.Contains(s, "secret") {
+			t.Errorf("History leaked loop/source content: %q", s)
+		}
+	}
+}
+
 func TestComprehensionPromptIncludesHistoryTurnAndAnswer(t *testing.T) {
 	ctx := context.Background()
 	m := newMemory(t, openRepo(t), "d1", "realism")

@@ -31,6 +31,7 @@ func TestNewRepositoriesPanicOnNilDB(t *testing.T) {
 	for name, fn := range map[string]func(){
 		"memory": func() { NewMemory(nil) },
 		"log":    func() { NewLog(nil) },
+		"turns":  func() { NewTurns(nil) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			defer func() {

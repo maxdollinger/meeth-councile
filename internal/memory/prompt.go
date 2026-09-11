@@ -19,7 +19,10 @@ func (m *Memory) SystemPrompt() string {
 }
 
 // History returns the persona's stored turns in order, ready to pass to
-// agent.Run. It contains no system message; the caller adds SystemPrompt.
+// agent.Run. It replays text only: its own past answers as assistant messages
+// and what it heard as user messages labeled by speaker. The stored agent loops
+// and raw sources are never replayed. History contains no system message; the
+// caller adds SystemPrompt.
 func (m *Memory) History(ctx context.Context) (llm.Input, error) {
 	entries, err := m.Entries(ctx)
 	if err != nil {
@@ -27,7 +30,15 @@ func (m *Memory) History(ctx context.Context) (llm.Input, error) {
 	}
 	var in llm.Input
 	for _, e := range entries {
-		in = append(in, e.Items...)
+		if e.Content == "" {
+			continue
+		}
+		switch e.Kind {
+		case KindAnswer:
+			in = append(in, llm.Assistant(e.Content))
+		case KindUnderstanding:
+			in = append(in, llm.User(label(e.Speaker, e.Content)))
+		}
 	}
 	return in, nil
 }
