@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -348,4 +349,138 @@ func containsContent(items []map[string]any, want string) bool {
 		}
 	}
 	return false
+}
+
+const originalQuestion = "ORIGINAL_QUESTION_MARKER: what makes a moral claim true?"
+
+// fillHistory appends enough large entries to push the replayed history past
+// the compaction budget.
+func fillHistory(t *testing.T, m *Memory, marker string, n int) {
+	t.Helper()
+	ctx := context.Background()
+	for i := 0; i < n; i++ {
+		content := marker + "-" + strconv.Itoa(i) + " " + strings.Repeat("wort ", 1600)
+		if err := m.AppendAnswer(ctx, Answer{Name: "realism", Content: content}); err != nil {
+			t.Fatalf("AppendAnswer: %v", err)
+		}
+	}
+}
+
+func TestShouldCompactTracksBudget(t *testing.T) {
+	ctx := context.Background()
+	m := newMemory(t, openRepo(t), "realism")
+	if err := m.AppendUnderstanding(ctx, Understanding{Speaker: "moderator", Content: originalQuestion, Source: originalQuestion}); err != nil {
+		t.Fatal(err)
+	}
+	if need, err := m.ShouldCompact(ctx); err != nil || need {
+		t.Fatalf("ShouldCompact on a tiny memory = %v, %v; want false, nil", need, err)
+	}
+	fillHistory(t, m, "OLD", 8)
+	if need, err := m.ShouldCompact(ctx); err != nil || !need {
+		t.Fatalf("ShouldCompact after filling = %v, %v; want true, nil", need, err)
+	}
+}
+
+func TestSummaryPromptExcludesOpeningAndCoversNewest(t *testing.T) {
+	ctx := context.Background()
+	m := newMemory(t, openRepo(t), "realism")
+	if err := m.AppendUnderstanding(ctx, Understanding{Speaker: "moderator", Content: originalQuestion, Source: originalQuestion}); err != nil {
+		t.Fatal(err)
+	}
+	fillHistory(t, m, "OLD", 8)
+
+	prompt, covers, ok, err := m.SummaryPrompt(ctx)
+	if err != nil {
+		t.Fatalf("SummaryPrompt: %v", err)
+	}
+	if !ok {
+		t.Fatal("SummaryPrompt ok = false, want true")
+	}
+	if covers <= 0 {
+		t.Errorf("coversThrough = %d, want > 0", covers)
+	}
+	if containsContent(wireOf(prompt), "ORIGINAL_QUESTION_MARKER") {
+		t.Error("summary prompt leaked the original question")
+	}
+	if !containsContent(wireOf(prompt), "OLD-") {
+		t.Error("summary prompt is missing the old entries to summarize")
+	}
+
+	// The newest entries stay verbatim: covers must leave the last entry out.
+	entries, _ := m.Entries(ctx)
+	if covers >= entries[len(entries)-1].Seq {
+		t.Errorf("coversThrough = %d, must be below the newest entry %d", covers, entries[len(entries)-1].Seq)
+	}
+}
+
+func TestAppendSummaryReplacesCoveredEntriesButKeepsOpening(t *testing.T) {
+	ctx := context.Background()
+	m := newMemory(t, openRepo(t), "realism")
+	if err := m.AppendUnderstanding(ctx, Understanding{Speaker: "moderator", Content: originalQuestion, Source: originalQuestion}); err != nil {
+		t.Fatal(err)
+	}
+	fillHistory(t, m, "OLD", 8)
+
+	_, covers, ok, err := m.SummaryPrompt(ctx)
+	if err != nil || !ok {
+		t.Fatalf("SummaryPrompt = ok %v, err %v", ok, err)
+	}
+	if err := m.AppendSummary(ctx, "CONDENSED SUMMARY", covers); err != nil {
+		t.Fatalf("AppendSummary: %v", err)
+	}
+
+	history, err := m.History(ctx)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	want := wireOf(history)
+	if len(want) == 0 {
+		t.Fatal("empty history")
+	}
+	if !containsContent(want, "ORIGINAL_QUESTION_MARKER") {
+		t.Error("history dropped the original question")
+	}
+	if !containsContent(want, "CONDENSED SUMMARY") {
+		t.Error("history missing the summary")
+	}
+
+	entries, _ := m.Entries(ctx)
+	// No covered entry may survive in the replayed history.
+	for _, e := range entries {
+		if e.Seq > covers || e.Kind == KindSummary || isOpening(e) {
+			continue
+		}
+		if containsContent(want, strings.TrimSpace(e.Content)) {
+			t.Errorf("covered entry seq %d leaked into history", e.Seq)
+		}
+	}
+}
+
+func TestSummaryPromptFoldsPreviousSummary(t *testing.T) {
+	ctx := context.Background()
+	m := newMemory(t, openRepo(t), "realism")
+	if err := m.AppendUnderstanding(ctx, Understanding{Speaker: "moderator", Content: originalQuestion, Source: originalQuestion}); err != nil {
+		t.Fatal(err)
+	}
+	fillHistory(t, m, "FIRST", 8)
+	_, covers, ok, err := m.SummaryPrompt(ctx)
+	if err != nil || !ok {
+		t.Fatalf("first SummaryPrompt = ok %v, err %v", ok, err)
+	}
+	if err := m.AppendSummary(ctx, "FIRST SUMMARY", covers); err != nil {
+		t.Fatal(err)
+	}
+
+	fillHistory(t, m, "SECOND", 8)
+	prompt, _, ok, err := m.SummaryPrompt(ctx)
+	if err != nil || !ok {
+		t.Fatalf("second SummaryPrompt = ok %v, err %v", ok, err)
+	}
+	all := wireOf(prompt)
+	if !containsContent(all, "FIRST SUMMARY") {
+		t.Error("second summary prompt did not carry the previous summary")
+	}
+	if containsContent(all, "ORIGINAL_QUESTION_MARKER") {
+		t.Error("second summary prompt leaked the original question")
+	}
 }

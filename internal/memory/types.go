@@ -13,6 +13,7 @@ type Entry = store.Entry
 const (
 	KindAnswer        = "answer"
 	KindUnderstanding = "understanding"
+	KindSummary       = "summary"
 )
 
 // Answer is one turn a persona spoke. Name and Content are the exchange

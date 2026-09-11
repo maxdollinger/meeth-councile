@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/maxdollinger/meeth-councile/internal/logging"
@@ -27,6 +28,9 @@ type Client struct {
 	baseURL string
 	http    *http.Client
 	logger  *slog.Logger
+
+	mu        sync.Mutex
+	totalCost float64
 }
 
 func New(apiKey string, httpClient *http.Client, opts ...Option) *Client {
@@ -75,7 +79,7 @@ func (c *Client) Response(model string, input Input, opts ...ResponseOption) (Re
 		c.logger.Warn("llm response error", "model", model, "duration", time.Since(start), "err", err)
 		return Result{}, err
 	}
-	c.logger.Debug("llm response",
+	c.logger.Info("llm call",
 		"model", res.Model,
 		"id", res.ID,
 		"duration", time.Since(start),
@@ -83,9 +87,18 @@ func (c *Client) Response(model string, input Input, opts ...ResponseOption) (Re
 		"output_tokens", res.Usage.OutputTokens,
 		"total_tokens", res.Usage.TotalTokens,
 		"cost", res.Usage.Cost,
+		"total_cost", c.addCost(res.Usage.Cost),
 		"tool_calls", len(res.ToolCalls),
 	)
 	return res, nil
+}
+
+// addCost adds a call's cost to the client's running total and returns it.
+func (c *Client) addCost(cost float64) float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.totalCost += cost
+	return c.totalCost
 }
 
 // do sends body to the /responses endpoint and returns the raw response body.

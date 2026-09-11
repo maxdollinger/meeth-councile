@@ -190,10 +190,14 @@ func (p *Persona) HearDirect(ctx context.Context, name, content string) (memory.
 func (p *Persona) Speak(ctx context.Context) (string, string, llm.Usage, llm.Input, error) {
 	start := time.Now()
 	p.logger.Info("speak started")
+	compactUsage, err := p.compact(ctx)
+	if err != nil {
+		p.logger.Warn("context compaction failed", "err", err)
+	}
 	history, err := p.memory.History(ctx)
 	if err != nil {
 		p.logger.Info("speak failed", "duration", time.Since(start), "err", err)
-		return "", "", llm.Usage{}, nil, err
+		return "", "", compactUsage, nil, err
 	}
 	input := make(llm.Input, 0, len(history)+1)
 	input = append(input, history...)
@@ -202,8 +206,14 @@ func (p *Persona) Speak(ctx context.Context) (string, string, llm.Usage, llm.Inp
 	res, err := p.loop.Run(ctx, input)
 	if err != nil {
 		p.logger.Info("speak failed", "duration", time.Since(start), "err", err)
-		return "", "", llm.Usage{}, nil, err
+		return "", "", compactUsage, nil, err
 	}
+
+	usage := res.Usage
+	usage.InputTokens += compactUsage.InputTokens
+	usage.OutputTokens += compactUsage.OutputTokens
+	usage.TotalTokens += compactUsage.TotalTokens
+	usage.Cost += compactUsage.Cost
 
 	content := strings.TrimSpace(res.Text)
 	output := newItems(input, res.History)
@@ -213,17 +223,46 @@ func (p *Persona) Speak(ctx context.Context) (string, string, llm.Usage, llm.Inp
 		Items:   output,
 	}); err != nil {
 		p.logger.Info("speak failed", "duration", time.Since(start), "err", err)
-		return "", "", res.Usage, nil, err
+		return "", "", usage, nil, err
 	}
 	p.logger.Info("speak finished",
 		"chars", len(content),
 		"passed", res.Passed,
 		"steps", res.Steps,
-		"total_tokens", res.Usage.TotalTokens,
-		"cost", res.Usage.Cost,
+		"total_tokens", usage.TotalTokens,
+		"cost", usage.Cost,
 		"duration", time.Since(start),
 	)
-	return p.name, content, res.Usage, output, nil
+	return p.name, content, usage, output, nil
+}
+
+// compact folds the oldest part of the persona's memory into a summary when the
+// replayed history grows past the budget. The moderator opening is never
+// summarized. It returns the usage of the summary call so the caller can bill
+// it with the turn it precedes.
+func (p *Persona) compact(ctx context.Context) (llm.Usage, error) {
+	need, err := p.memory.ShouldCompact(ctx)
+	if err != nil || !need {
+		return llm.Usage{}, err
+	}
+	prompt, coversThrough, ok, err := p.memory.SummaryPrompt(ctx)
+	if err != nil || !ok {
+		return llm.Usage{}, err
+	}
+	opts := append(append([]llm.ResponseOption{}, p.opts...), llm.WithContext(ctx))
+	res, err := p.client.Response(p.model, prompt, opts...)
+	if err != nil {
+		return llm.Usage{}, err
+	}
+	summary := strings.TrimSpace(res.Text)
+	if summary == "" {
+		return res.Usage, errors.New("persona: empty summary")
+	}
+	if err := p.memory.AppendSummary(ctx, summary, coversThrough); err != nil {
+		return res.Usage, err
+	}
+	p.logger.Info("context compacted", "covers_through", coversThrough, "summary_chars", len(summary), "total_tokens", res.Usage.TotalTokens, "cost", res.Usage.Cost)
+	return res.Usage, nil
 }
 
 // understand runs the persona's single comprehension completion: one model call

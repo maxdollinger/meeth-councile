@@ -23,13 +23,24 @@ func (m *Memory) SystemPrompt() string {
 // and what it heard as user messages labeled by speaker. The stored agent loops
 // and raw sources are never replayed. History contains no system message; the
 // caller adds SystemPrompt.
+//
+// The moderator opening is always replayed first, verbatim. Once the memory has
+// been compacted, the summary replaces every entry it covers, so only the
+// opening, the summary, and the entries after the summary's coverage appear.
 func (m *Memory) History(ctx context.Context) (llm.Input, error) {
 	entries, err := m.Entries(ctx)
 	if err != nil {
 		return nil, err
 	}
+	v := buildView(entries)
 	var in llm.Input
-	for _, e := range entries {
+	if v.opening != nil {
+		in = append(in, llm.User(label(v.opening.Speaker, v.opening.Content)))
+	}
+	if v.summary != nil {
+		in = append(in, llm.User("Zusammenfassung des bisherigen Gesprächs:\n"+v.summary.Content))
+	}
+	for _, e := range v.recent {
 		if e.Content == "" {
 			continue
 		}

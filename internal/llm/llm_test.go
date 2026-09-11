@@ -1,10 +1,12 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -100,6 +102,39 @@ func TestResponseSuccess(t *testing.T) {
 	msg := gotBody.Input[0]
 	if msg["type"] != "message" || msg["role"] != "user" || msg["content"] != "hi there" {
 		t.Errorf("Input[0] = %+v, want message/user/hi there", msg)
+	}
+}
+
+func TestResponseLogsRunningTotalCost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{
+			"id":"resp-1",
+			"model":"gpt-4",
+			"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],
+			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2,"cost":0.25}
+		}`)
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	c := New("test-key", srv.Client(), WithLogger(logger))
+	c.baseURL = srv.URL
+
+	for i := 0; i < 2; i++ {
+		if _, err := c.Response("gpt-4", Input{User("hi")}); err != nil {
+			t.Fatalf("Response %d: %v", i, err)
+		}
+	}
+	out := buf.String()
+	if !strings.Contains(out, "llm call") || !strings.Contains(out, "cost=0.25") {
+		t.Errorf("logs missing per-call cost:\n%s", out)
+	}
+	if !strings.Contains(out, "total_cost=0.5") {
+		t.Errorf("logs missing the running total 0.5:\n%s", out)
+	}
+	if got := strings.Count(out, "total_cost="); got != 2 {
+		t.Errorf("total_cost logged %d times, want once per call", got)
 	}
 }
 

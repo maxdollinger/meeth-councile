@@ -96,7 +96,7 @@ func main() {
 
 	d, err := discussion.New(
 		topic, speakers, models, turns,
-		discussion.WithMaxRounds(1),
+		discussion.WithMaxRounds(100),
 		discussion.WithLogger(logger),
 	)
 	if err != nil {

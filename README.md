@@ -60,10 +60,22 @@ persistence and prompt assembly — it never calls a model itself.
   outputs, and the final message. Future turns replay that sequence verbatim, so
   a persona both sees its own past answers and resumes its own chain of thought.
 - **Moderator opening.** Just the first thing a persona hears, personalized like
-  anything else.
+  anything else. It is always replayed verbatim and is never summarized away.
 
 Because memory is per-persona, two agents can hold incompatible readings of the
 same exchange, which is the point.
+
+### Compaction
+
+Memory is bounded: each persona is tuned for an assumed 32k context window
+(`internal/memory/compact.go`). When the replayed history passes the budget, the
+persona's oldest entries are folded into a single summary, produced by one
+model call through the same path as any other understanding. From then on the
+history is the opening, the summary, and the entries after it; the raw covered
+entries stay in the database for audit but are no longer replayed. A later
+compaction folds the previous summary into the new one, so there is always at
+most one. The moderator opening is deliberately excluded from the summary and
+always replayed first.
 
 ## Tooling: research assistant
 

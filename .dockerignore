@@ -1,0 +1,12 @@
+.git
+.github
+*.db
+*.db-wal
+*.db-shm
+meeth-councile
+*.exe
+*.test
+*.out
+README.md
+Dockerfile
+.dockerignore

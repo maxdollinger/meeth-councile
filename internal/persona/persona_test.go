@@ -338,6 +338,54 @@ func TestSpeakReadsPriorMemoryWithoutDuplicatingIt(t *testing.T) {
 	}
 }
 
+func TestSpeakCompactsHistoryAndBillsSummaryCall(t *testing.T) {
+	ctx := context.Background()
+	fc := &fakeClient{respond: func(call fakeCall, _ int) (llm.Result, error) {
+		last, _ := call.input[len(call.input)-1].(llm.Message)
+		if strings.Contains(last.Content, "komprimiert zusammen") {
+			return llm.Result{Text: "SUMMARY", Usage: llm.Usage{TotalTokens: 7, Cost: 0.007}}, nil
+		}
+		return llm.Result{Text: "my argument", Usage: llm.Usage{TotalTokens: 15, Cost: 0.01}}, nil
+	}}
+	mem := newMemory(t, "realism")
+	if err := mem.AppendUnderstanding(ctx, memory.Understanding{Speaker: "moderator", Content: "ORIGINAL QUESTION", Source: "ORIGINAL QUESTION"}); err != nil {
+		t.Fatalf("AppendUnderstanding: %v", err)
+	}
+	for i := 0; i < 8; i++ {
+		if err := mem.AppendAnswer(ctx, memory.Answer{Name: "realism", Content: "OLD " + strings.Repeat("wort ", 1600)}); err != nil {
+			t.Fatalf("AppendAnswer: %v", err)
+		}
+	}
+	p, err := New(mem, fc, "m", &fakeResearcher{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, content, usage, _, err := p.Speak(ctx)
+	if err != nil {
+		t.Fatalf("Speak: %v", err)
+	}
+	if content != "my argument" {
+		t.Errorf("content = %q, want my argument", content)
+	}
+	if usage.TotalTokens != 22 || usage.Cost != 0.017 {
+		t.Errorf("usage = %+v, want the summary call billed with the turn", usage)
+	}
+	if len(fc.calls) != 2 {
+		t.Fatalf("model calls = %d, want summary + speak", len(fc.calls))
+	}
+	entries, _ := mem.Entries(ctx)
+	found := false
+	for _, e := range entries {
+		if e.Kind == memory.KindSummary {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no summary entry stored")
+	}
+}
+
 func TestLogsPersonaAndCurrentModelOnce(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
