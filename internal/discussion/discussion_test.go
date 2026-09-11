@@ -28,6 +28,7 @@ type fakeSpeaker struct {
 	speakN       int
 	respond      func(n int) (string, error)
 	output       llm.Input
+	usage        llm.Usage
 	speakErr     error
 	hearErr      error
 }
@@ -43,17 +44,17 @@ func (f *fakeSpeaker) UseModel(model string) error {
 	return nil
 }
 
-func (f *fakeSpeaker) Speak(context.Context) (string, string, llm.Input, error) {
+func (f *fakeSpeaker) Speak(context.Context) (string, string, llm.Usage, llm.Input, error) {
 	f.speakN++
 	if f.speakErr != nil {
-		return "", "", nil, f.speakErr
+		return "", "", llm.Usage{}, nil, f.speakErr
 	}
 	f.spokenModels = append(f.spokenModels, f.lastModel)
 	content := "turn " + strconv.Itoa(f.speakN)
 	if f.respond != nil {
 		c, err := f.respond(f.speakN)
 		if err != nil {
-			return "", "", nil, err
+			return "", "", llm.Usage{}, nil, err
 		}
 		content = c
 	}
@@ -61,15 +62,15 @@ func (f *fakeSpeaker) Speak(context.Context) (string, string, llm.Input, error) 
 	if output == nil {
 		output = llm.Input{llm.Assistant(content)}
 	}
-	return f.name, content, output, nil
+	return f.name, content, f.usage, output, nil
 }
 
-func (f *fakeSpeaker) Hear(_ context.Context, name, content string) (memory.Understanding, error) {
+func (f *fakeSpeaker) Hear(_ context.Context, name, content string) (memory.Understanding, llm.Usage, error) {
 	if f.hearErr != nil {
-		return memory.Understanding{}, f.hearErr
+		return memory.Understanding{}, llm.Usage{}, f.hearErr
 	}
 	f.hears = append(f.hears, hearCall{speaker: name, content: content})
-	return memory.Understanding{Speaker: name, Content: content}, nil
+	return memory.Understanding{Speaker: name, Content: content}, f.usage, nil
 }
 
 func (f *fakeSpeaker) HearDirect(_ context.Context, name, content string) (memory.Understanding, error) {
@@ -83,6 +84,7 @@ func (f *fakeSpeaker) HearDirect(_ context.Context, name, content string) (memor
 type fakeStore struct {
 	turns   []Turn
 	entries []SpeakEntry
+	calls   []Call
 	err     error
 }
 
@@ -99,6 +101,14 @@ func (f *fakeStore) AppendSpeakEntry(_ context.Context, e SpeakEntry) error {
 		return f.err
 	}
 	f.entries = append(f.entries, e)
+	return nil
+}
+
+func (f *fakeStore) AppendCall(_ context.Context, c Call) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.calls = append(f.calls, c)
 	return nil
 }
 
@@ -450,6 +460,56 @@ func TestRunMarksPassEntry(t *testing.T) {
 	}
 	if res.Entries[1].Kind != kindPass {
 		t.Errorf("pass entry kind = %q, want %q", res.Entries[1].Kind, kindPass)
+	}
+}
+
+func TestRunRecordsModelCallsWithUsage(t *testing.T) {
+	a, b := speaker("a"), speaker("b")
+	a.usage = llm.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15, Cost: 0.01}
+	b.usage = llm.Usage{InputTokens: 20, OutputTokens: 7, TotalTokens: 27, Cost: 0.02}
+	a.respond = func(n int) (string, error) {
+		if n == 1 {
+			return "alpha", nil
+		}
+		return "PASS", nil
+	}
+	b.respond = alwaysPass
+	st := &fakeStore{}
+	d, err := New(testTopic, []Speaker{a, b}, []string{"m1"}, st,
+		WithRand(rand.New(rand.NewSource(1))), WithMaxRounds(1))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	res, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	speaks, understands := 0, 0
+	for _, c := range res.Calls {
+		if c.Round != 1 {
+			t.Errorf("call round = %d, want 1", c.Round)
+		}
+		if c.Model != "m1" {
+			t.Errorf("call model = %q, want m1", c.Model)
+		}
+		switch c.Purpose {
+		case "speak":
+			speaks++
+		case "understand":
+			understands++
+		default:
+			t.Errorf("unexpected purpose %q", c.Purpose)
+		}
+	}
+	if speaks != 2 {
+		t.Errorf("speak calls = %d, want 2", speaks)
+	}
+	if understands != 1 {
+		t.Errorf("understand calls = %d, want 1", understands)
+	}
+	if len(res.Calls) != len(st.calls) {
+		t.Errorf("stored calls = %d, want %d", len(st.calls), len(res.Calls))
 	}
 }
 

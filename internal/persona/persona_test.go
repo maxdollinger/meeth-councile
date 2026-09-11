@@ -112,7 +112,7 @@ func TestHearIsSingleComprehension(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	u, err := p.Hear(context.Background(), "error-theory", "there are no moral facts")
+	u, _, err := p.Hear(context.Background(), "error-theory", "there are no moral facts")
 	if err != nil {
 		t.Fatalf("Hear: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestHearStoresUnderstandingOnly(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	u, err := p.Hear(context.Background(), "error-theory", "there are no moral facts")
+	u, _, err := p.Hear(context.Background(), "error-theory", "there are no moral facts")
 	if err != nil {
 		t.Fatalf("Hear: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestHearDoesNotUseResearchTool(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := p.Hear(context.Background(), "expressivism", "morality is just attitude"); err != nil {
+	if _, _, err := p.Hear(context.Background(), "expressivism", "morality is just attitude"); err != nil {
 		t.Fatalf("Hear: %v", err)
 	}
 	if len(rc.calls) != 0 {
@@ -231,7 +231,10 @@ func TestHearDoesNotUseResearchTool(t *testing.T) {
 
 func TestSpeakStoresAnswerAndReturnsNameContent(t *testing.T) {
 	fc := &fakeClient{respond: func(call fakeCall, _ int) (llm.Result, error) {
-		return llm.Result{Text: "my argument"}, nil
+		return llm.Result{
+			Text:  "my argument",
+			Usage: llm.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15, Cost: 0.01},
+		}, nil
 	}}
 	mem := newMemory(t, "realism")
 	p, err := New(mem, fc, "m", &fakeResearcher{})
@@ -239,12 +242,15 @@ func TestSpeakStoresAnswerAndReturnsNameContent(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	name, content, _, err := p.Speak(context.Background())
+	name, content, usage, _, err := p.Speak(context.Background())
 	if err != nil {
 		t.Fatalf("Speak: %v", err)
 	}
 	if name != "realism" || content != "my argument" {
 		t.Errorf("Speak = (%q, %q), want (realism, my argument)", name, content)
+	}
+	if usage.TotalTokens != 15 || usage.Cost != 0.01 {
+		t.Errorf("usage = %+v, want the loop's usage and cost", usage)
 	}
 
 	entries, err := mem.Entries(context.Background())
@@ -275,7 +281,7 @@ func TestUseModelSwitchesSubsequentCalls(t *testing.T) {
 	if err := p.UseModel("m2"); err != nil {
 		t.Fatalf("UseModel: %v", err)
 	}
-	if _, _, _, err := p.Speak(context.Background()); err != nil {
+	if _, _, _, _, err := p.Speak(context.Background()); err != nil {
 		t.Fatalf("Speak: %v", err)
 	}
 	if got := fc.calls[len(fc.calls)-1].model; got != "m2" {
@@ -300,10 +306,10 @@ func TestSpeakReadsPriorMemoryWithoutDuplicatingIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := p.Hear(context.Background(), "error-theory", "no moral facts"); err != nil {
+	if _, _, err := p.Hear(context.Background(), "error-theory", "no moral facts"); err != nil {
 		t.Fatalf("Hear: %v", err)
 	}
-	if _, _, _, err := p.Speak(context.Background()); err != nil {
+	if _, _, _, _, err := p.Speak(context.Background()); err != nil {
 		t.Fatalf("Speak: %v", err)
 	}
 
@@ -342,13 +348,13 @@ func TestLogsPersonaAndCurrentModelOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := p.Hear(context.Background(), "error-theory", "no moral facts"); err != nil {
+	if _, _, err := p.Hear(context.Background(), "error-theory", "no moral facts"); err != nil {
 		t.Fatalf("Hear: %v", err)
 	}
 	if err := p.UseModel("m2"); err != nil {
 		t.Fatalf("UseModel: %v", err)
 	}
-	if _, _, _, err := p.Speak(context.Background()); err != nil {
+	if _, _, _, _, err := p.Speak(context.Background()); err != nil {
 		t.Fatalf("Speak: %v", err)
 	}
 

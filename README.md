@@ -85,7 +85,7 @@ passed in), keeping it a clean, independently testable component.
 
 ## Logging
 
-Two separate SQLite records are kept:
+Several separate SQLite records are kept:
 
 - **Per-persona memory** — each persona's own answers plus its personalized
   understandings of everything it heard. This is what that persona reasons
@@ -94,6 +94,10 @@ Two separate SQLite records are kept:
   reasoning, tool calls, tool outputs, and the final message. The web
   transcript renders these entries by time, rather than only the completed
   turns.
+- **Model-call cost log** — every debate model call (a persona speaking, or
+  comprehending what it heard) with its model, round, purpose, token usage, and
+  cost. Together with the research log below, this covers every paid call; the
+  per-turn cost total is `SUM(cost)` across both tables.
 - **Research log** — every research-assistant call: query, caller, and raw
   output, kept for review/debugging but never fed back into any model.
 

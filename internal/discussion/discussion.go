@@ -37,18 +37,23 @@ type Turn = store.Turn
 // SpeakEntry is one output item produced during a speak turn.
 type SpeakEntry = store.SpeakEntry
 
-// Store persists the shared transcript and every speak output.
+// Call is one recorded model call with its tokens and cost.
+type Call = store.Call
+
+// Store persists the shared transcript, every speak output, and the model-call
+// cost log.
 type Store interface {
 	Append(ctx context.Context, turn Turn) error
 	AppendSpeakEntry(ctx context.Context, entry SpeakEntry) error
+	AppendCall(ctx context.Context, call Call) error
 }
 
 // Speaker is the slice of *persona.Persona the discussion depends on.
 type Speaker interface {
 	Name() string
 	UseModel(model string) error
-	Speak(ctx context.Context) (name, content string, output llm.Input, err error)
-	Hear(ctx context.Context, name, content string) (memory.Understanding, error)
+	Speak(ctx context.Context) (name, content string, usage llm.Usage, output llm.Input, err error)
+	Hear(ctx context.Context, name, content string) (memory.Understanding, llm.Usage, error)
 	HearDirect(ctx context.Context, name, content string) (memory.Understanding, error)
 }
 
@@ -66,6 +71,7 @@ const (
 type Result struct {
 	Turns   []Turn
 	Entries []SpeakEntry
+	Calls   []Call
 	Rounds  int
 	Ended   EndReason
 }
@@ -80,6 +86,9 @@ type Discussion struct {
 	rng       *rand.Rand
 	maxRounds int
 	logger    *slog.Logger
+	// current is each speaker's model in use, updated whenever UseModel is
+	// called, so a heard turn can be attributed to the listener's model.
+	current map[string]string
 }
 
 // New builds a Discussion. topic is the moderator opening every speaker hears
@@ -133,6 +142,7 @@ func New(topic string, speakers []Speaker, models []string, store Store, opts ..
 		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
 		maxRounds: defaultMaxRounds,
 		logger:    logging.Discard(),
+		current:   make(map[string]string, len(speakers)),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -166,7 +176,8 @@ func (d *Discussion) Run(ctx context.Context) (Result, error) {
 			if err := sp.UseModel(models[name]); err != nil {
 				return result, fmt.Errorf("discussion: set model for %s: %w", name, err)
 			}
-			speaker, content, _, err := sp.Speak(ctx)
+			d.current[name] = models[name]
+			speaker, content, usage, _, err := sp.Speak(ctx)
 			if err != nil {
 				return result, fmt.Errorf("discussion: %s speaks: %w", name, err)
 			}
@@ -191,13 +202,22 @@ func (d *Discussion) Run(ctx context.Context) (Result, error) {
 				}
 				result.Entries = append(result.Entries, entry)
 			}
-			logger.Info("turn", "round", round, "order", i+1, "speaker", speaker, "model", models[name], "passed", passed, "chars", len(content), "outputs", len(entries), "duration", time.Since(start))
+			if err := d.recordCall(ctx, &result, Call{
+				Round:   round,
+				Speaker: speaker,
+				Model:   models[name],
+				Purpose: store.CallSpeak,
+				Usage:   usage,
+			}); err != nil {
+				return result, err
+			}
+			logger.Info("turn", "round", round, "order", i+1, "speaker", speaker, "model", models[name], "passed", passed, "chars", len(content), "outputs", len(entries), "total_tokens", usage.TotalTokens, "cost", usage.Cost, "duration", time.Since(start))
 
 			if passed {
 				passes++
 				continue
 			}
-			if err := d.hear(ctx, logger, order, speaker, content); err != nil {
+			if err := d.hear(ctx, logger, round, &result, order, speaker, content); err != nil {
 				return result, err
 			}
 		}
@@ -263,9 +283,11 @@ func (d *Discussion) open(ctx context.Context, result *Result) error {
 	result.Entries = append(result.Entries, entry)
 
 	for _, sp := range d.speakers {
-		if err := sp.UseModel(d.pickModel()); err != nil {
+		model := d.pickModel()
+		if err := sp.UseModel(model); err != nil {
 			return fmt.Errorf("discussion: set model for %s: %w", sp.Name(), err)
 		}
+		d.current[sp.Name()] = model
 		if _, err := sp.HearDirect(ctx, moderator, d.topic); err != nil {
 			return fmt.Errorf("discussion: %s hears the opening: %w", sp.Name(), err)
 		}
@@ -274,18 +296,38 @@ func (d *Discussion) open(ctx context.Context, result *Result) error {
 	return nil
 }
 
-// hear delivers a spoken turn to every other speaker.
-func (d *Discussion) hear(ctx context.Context, logger *slog.Logger, order []Speaker, speaker, content string) error {
+// hear delivers a spoken turn to every other speaker, recording each listener's
+// comprehension call and its cost.
+func (d *Discussion) hear(ctx context.Context, logger *slog.Logger, round int, result *Result, order []Speaker, speaker, content string) error {
 	for _, other := range order {
 		if other.Name() == speaker {
 			continue
 		}
 		start := time.Now()
-		if _, err := other.Hear(ctx, speaker, content); err != nil {
+		_, usage, err := other.Hear(ctx, speaker, content)
+		if err != nil {
 			return fmt.Errorf("discussion: %s hears %s: %w", other.Name(), speaker, err)
 		}
-		logger.Debug("hears", "speaker", speaker, "listener", other.Name(), "chars", len(content), "duration", time.Since(start))
+		if err := d.recordCall(ctx, result, Call{
+			Round:   round,
+			Speaker: other.Name(),
+			Model:   d.current[other.Name()],
+			Purpose: store.CallUnderstand,
+			Usage:   usage,
+		}); err != nil {
+			return err
+		}
+		logger.Debug("hears", "speaker", speaker, "listener", other.Name(), "chars", len(content), "total_tokens", usage.TotalTokens, "cost", usage.Cost, "duration", time.Since(start))
 	}
+	return nil
+}
+
+// recordCall appends a model call to the store and the result.
+func (d *Discussion) recordCall(ctx context.Context, result *Result, call Call) error {
+	if err := d.store.AppendCall(ctx, call); err != nil {
+		return err
+	}
+	result.Calls = append(result.Calls, call)
 	return nil
 }
 

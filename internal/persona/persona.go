@@ -136,14 +136,15 @@ func (p *Persona) loopOptions() []agent.Option {
 // Hear interprets something the persona heard. name is the speaker and content
 // is what they said. A single comprehension completion turns it into the
 // persona's own subjective summary, which is stored and returned. Source keeps
-// the raw words for audit.
-func (p *Persona) Hear(ctx context.Context, name, content string) (memory.Understanding, error) {
+// the raw words for audit, and the returned usage carries that call's tokens
+// and cost.
+func (p *Persona) Hear(ctx context.Context, name, content string) (memory.Understanding, llm.Usage, error) {
 	start := time.Now()
 	p.logger.Info("hear started", "speaker", name, "heard_chars", len(content))
-	summary, err := p.understand(ctx, name, content)
+	summary, usage, err := p.understand(ctx, name, content)
 	if err != nil {
 		p.logger.Info("hear failed", "speaker", name, "duration", time.Since(start), "err", err)
-		return memory.Understanding{}, err
+		return memory.Understanding{}, llm.Usage{}, err
 	}
 
 	u := memory.Understanding{
@@ -153,10 +154,17 @@ func (p *Persona) Hear(ctx context.Context, name, content string) (memory.Unders
 	}
 	if err := p.memory.AppendUnderstanding(ctx, u); err != nil {
 		p.logger.Info("hear failed", "speaker", name, "duration", time.Since(start), "err", err)
-		return memory.Understanding{}, err
+		return memory.Understanding{}, usage, err
 	}
-	p.logger.Info("hear finished", "speaker", name, "heard_chars", len(content), "understanding_chars", len(u.Content), "duration", time.Since(start))
-	return u, nil
+	p.logger.Info("hear finished",
+		"speaker", name,
+		"heard_chars", len(content),
+		"understanding_chars", len(u.Content),
+		"total_tokens", usage.TotalTokens,
+		"cost", usage.Cost,
+		"duration", time.Since(start),
+	)
+	return u, usage, nil
 }
 
 // HearDirect records what was heard verbatim, without the comprehension step
@@ -177,15 +185,15 @@ func (p *Persona) HearDirect(ctx context.Context, name, content string) (memory.
 
 // Speak produces the persona's next turn. It reasons from its full memory
 // through the research-capable loop, persists the answer (with the loop, so
-// future turns resume its reasoning), and returns the persona's name and the
-// answer text.
-func (p *Persona) Speak(ctx context.Context) (string, string, llm.Input, error) {
+// future turns resume its reasoning), and returns the persona's name, the
+// answer text, and the loop's summed usage and cost.
+func (p *Persona) Speak(ctx context.Context) (string, string, llm.Usage, llm.Input, error) {
 	start := time.Now()
 	p.logger.Info("speak started")
 	history, err := p.memory.History(ctx)
 	if err != nil {
 		p.logger.Info("speak failed", "duration", time.Since(start), "err", err)
-		return "", "", nil, err
+		return "", "", llm.Usage{}, nil, err
 	}
 	input := make(llm.Input, 0, len(history)+1)
 	input = append(input, history...)
@@ -194,7 +202,7 @@ func (p *Persona) Speak(ctx context.Context) (string, string, llm.Input, error) 
 	res, err := p.loop.Run(ctx, input)
 	if err != nil {
 		p.logger.Info("speak failed", "duration", time.Since(start), "err", err)
-		return "", "", nil, err
+		return "", "", llm.Usage{}, nil, err
 	}
 
 	content := strings.TrimSpace(res.Text)
@@ -205,27 +213,35 @@ func (p *Persona) Speak(ctx context.Context) (string, string, llm.Input, error) 
 		Items:   output,
 	}); err != nil {
 		p.logger.Info("speak failed", "duration", time.Since(start), "err", err)
-		return "", "", nil, err
+		return "", "", res.Usage, nil, err
 	}
-	p.logger.Info("speak finished", "chars", len(content), "passed", res.Passed, "steps", res.Steps, "duration", time.Since(start))
-	return p.name, content, output, nil
+	p.logger.Info("speak finished",
+		"chars", len(content),
+		"passed", res.Passed,
+		"steps", res.Steps,
+		"total_tokens", res.Usage.TotalTokens,
+		"cost", res.Usage.Cost,
+		"duration", time.Since(start),
+	)
+	return p.name, content, res.Usage, output, nil
 }
 
 // understand runs the persona's single comprehension completion: one model call
 // (no tools) that turns what was heard, plus everything already understood,
-// into a subjective summary in the persona's own voice.
-func (p *Persona) understand(ctx context.Context, name, content string) (string, error) {
+// into a subjective summary in the persona's own voice. It returns that call's
+// usage and cost alongside the summary.
+func (p *Persona) understand(ctx context.Context, name, content string) (string, llm.Usage, error) {
 	prompt, err := p.memory.ComprehensionPrompt(ctx, memory.Answer{Name: name, Content: content}, nil)
 	if err != nil {
-		return "", err
+		return "", llm.Usage{}, err
 	}
 	opts := append(append([]llm.ResponseOption{}, p.opts...), llm.WithContext(ctx))
 	res, err := p.client.Response(p.model, prompt, opts...)
 	if err != nil {
-		return "", err
+		return "", llm.Usage{}, err
 	}
 	p.logger.Debug("persona comprehension", "speaker", name, "chars", len(res.Text))
-	return strings.TrimSpace(res.Text), nil
+	return strings.TrimSpace(res.Text), res.Usage, nil
 }
 
 // researchTool adapts the researcher to the agent loop. The model supplies a

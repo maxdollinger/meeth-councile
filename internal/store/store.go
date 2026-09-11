@@ -1,10 +1,11 @@
 // Package store owns the SQLite database behind the debate's durable records:
-// each persona's private memory and the research assistant's audit log.
+// each persona's private memory, the shared transcript, the model-call cost
+// log, and the research assistant's audit log.
 //
 // It is the only package that talks to the database. Open creates the
-// connection and applies every table; NewMemory and NewLog wrap that plain
-// *sql.DB in one repository per record family, so the connection is opened once
-// and each repository manages only its own logic.
+// connection and applies every table; NewMemory, NewTurns, NewCalls, and NewLog
+// wrap that plain *sql.DB in one repository per record family, so the connection
+// is opened once and each repository manages only its own logic.
 package store
 
 import (

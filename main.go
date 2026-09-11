@@ -68,7 +68,7 @@ func main() {
 	defer db.Close()
 	logger.Info("store opened", "db_path", dbPath)
 
-	turns := store.NewTurns(db)
+	turns := store.NewRecorder(db)
 
 	client := llm.New(apiKey, &http.Client{Timeout: 5 * time.Minute}, llm.WithLogger(logger))
 	assistant := research.New(client, researchModel, store.NewLog(db), research.WithLogger(logger))
@@ -114,7 +114,7 @@ func main() {
 	}
 
 	srv := &server{
-		turns:         turns,
+		turns:         turns.Turns,
 		title:         title,
 		personas:      defs,
 		models:        models,
@@ -144,6 +144,9 @@ func main() {
 			"rounds", res.Rounds,
 			"ended", string(res.Ended),
 			"turns", len(res.Turns),
+			"model_calls", len(res.Calls),
+			"total_tokens", totalUsage(res).TotalTokens,
+			"cost", totalUsage(res).Cost,
 		)
 	}()
 
@@ -227,7 +230,9 @@ func (s *server) handle(tmpl *template.Template) http.HandlerFunc {
 
 // printTranscript writes every speak entry, with its time, to stdout.
 func printTranscript(res discussion.Result) {
-	fmt.Printf("\n=== %d round(s), ended: %s ===\n\n", res.Rounds, res.Ended)
+	fmt.Printf("\n=== %d round(s), ended: %s ===\n", res.Rounds, res.Ended)
+	usage := totalUsage(res)
+	fmt.Printf("=== %d model calls · %d tokens · $%.6f ===\n\n", len(res.Calls), usage.TotalTokens, usage.Cost)
 	for _, e := range res.Entries {
 		stamp := e.CreatedAt.Format("2006-01-02 15:04:05")
 		if e.Round == 0 {
@@ -236,6 +241,18 @@ func printTranscript(res discussion.Result) {
 		}
 		fmt.Printf("%s · round %d · %s · %s (%s):\n%s\n\n", stamp, e.Round, e.Speaker, e.Kind, e.Model, e.Content)
 	}
+}
+
+// totalUsage sums the tokens and cost of every model call in a run.
+func totalUsage(res discussion.Result) llm.Usage {
+	var total llm.Usage
+	for _, call := range res.Calls {
+		total.InputTokens += call.Usage.InputTokens
+		total.OutputTokens += call.Usage.OutputTokens
+		total.TotalTokens += call.Usage.TotalTokens
+		total.Cost += call.Usage.Cost
+	}
+	return total
 }
 
 func fatal(logger *slog.Logger, msg string, args ...any) {

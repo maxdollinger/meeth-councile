@@ -70,3 +70,21 @@ CREATE TABLE IF NOT EXISTS research_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_research_log_caller ON research_log (caller, created_at);
+
+-- Every debate model call (a persona speaking, or comprehending what it heard),
+-- with its token usage and cost. Research-assistant calls are logged separately
+-- in research_log, so the two tables together cover every paid model call.
+CREATE TABLE IF NOT EXISTS model_calls (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    round         INTEGER NOT NULL DEFAULT 0,
+    speaker       TEXT NOT NULL,
+    model         TEXT NOT NULL,
+    purpose       TEXT NOT NULL,
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens  INTEGER NOT NULL DEFAULT 0,
+    cost          REAL NOT NULL DEFAULT 0,
+    created_at    INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_calls_round ON model_calls (round, created_at);

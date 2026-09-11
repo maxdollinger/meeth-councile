@@ -32,6 +32,7 @@ func TestNewRepositoriesPanicOnNilDB(t *testing.T) {
 		"memory": func() { NewMemory(nil) },
 		"log":    func() { NewLog(nil) },
 		"turns":  func() { NewTurns(nil) },
+		"calls":  func() { NewCalls(nil) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			defer func() {
