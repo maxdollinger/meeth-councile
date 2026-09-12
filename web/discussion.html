@@ -11,18 +11,20 @@
 <header>
   <h1>{{.Title}}</h1>
   <p class="tagline">{{if .Running}}läuft{{else}}beendet{{end}}</p>
-  <p class="round">Runde {{.Round}}/{{.MaxRounds}}</p>
+  <p class="round">Runde {{.Round}}/{{.MaxRounds}}
+  {{if .LastRound}}<span class="jump"><a href="#last-round">&darr; zur letzten Runde springen</a></span>{{end}}
+      </p>
 </header>
 
 <main>
-{{range .Entries}}{{if eq .Kind "opening"}}
+{{$last := .LastRound}}{{$marked := false}}{{range .Entries}}{{if eq .Kind "opening"}}
   <section class="opening">
     <h2>Ausgangsfrage</h2>
     <p class="meta"><time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05"}}">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</time></p>
     <p class="content">{{.Content}}</p>
   </section>
 {{else}}
-  <article class="entry {{.Kind}}">
+  <article class="entry {{.Kind}}"{{if and (eq .Round $last) (not $marked)}} id="last-round"{{$marked = true}}{{end}}>
     <p class="meta">{{.Speaker}} &middot; <time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05"}}">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</time></p>
     <p class="content">{{.Content}}</p>
   </article>

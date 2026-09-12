@@ -195,6 +195,7 @@ type discussionView struct {
 	Entries   []store.SpeakEntry
 	Running   bool
 	Round     int
+	LastRound int
 	MaxRounds int
 }
 
@@ -232,7 +233,8 @@ func (s *server) handle(tmpl *template.Template) http.HandlerFunc {
 			http.Error(w, "could not load the discussion", http.StatusInternalServerError)
 			return
 		}
-		round := currentRound(entries)
+		lastRound := currentRound(entries)
+		round := lastRound
 		if round == 0 {
 			round = 1
 		}
@@ -242,6 +244,7 @@ func (s *server) handle(tmpl *template.Template) http.HandlerFunc {
 			Entries:   entries,
 			Running:   s.running.Load(),
 			Round:     round,
+			LastRound: lastRound,
 			MaxRounds: s.maxRounds,
 		}); err != nil {
 			s.logger.Error("render discussion", "err", err)

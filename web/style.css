@@ -22,7 +22,7 @@ body {
   max-width: 42rem;
   background: var(--bg);
   color: var(--fg);
-  font-size: 16px;
+  font-size: 20px;
   line-height: 1.65;
 }
 
@@ -43,11 +43,30 @@ h1 {
 }
 
 .round {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: flex-end;
   margin: 0.5rem 0 0;
   font-size: 1.1rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+
+.jump { margin: 0.75rem 0 0 1rem; }
+
+.jump a {
+  display: inline-block;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--fg);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.jump a:hover { background: var(--fg); color: var(--bg); }
+
+#last-round { scroll-margin-top: 1rem; }
 
 .cta { margin: 1.5rem 0 0; }
 
@@ -110,7 +129,6 @@ a { color: inherit; }
 .opening .content {
   white-space: normal;
   font-style: italic;
-  font-size: 1.05rem;
 }
 
 .entry { margin: 0 0 1.75rem; }
